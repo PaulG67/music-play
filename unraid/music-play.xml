@@ -19,7 +19,7 @@
   <Category>MediaApp:Music</Category>
   <WebUI>http://[IP]:[PORT:5080]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/PaulG67/music-play/main/unraid/music-play.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/PaulG67/music-play/main/app/static/icons/icon.svg</Icon>
+  <Icon>https://raw.githubusercontent.com/PaulG67/music-play/main/icon.png</Icon>
   <ExtraParams>--memory=2g --cap-add=NET_BIND_SERVICE</ExtraParams>
   <PostArgs/>
   <CPUset/>

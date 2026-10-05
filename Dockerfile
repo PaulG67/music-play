@@ -1,5 +1,7 @@
 FROM python:3.12-slim
 
+LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/PaulG67/music-play/main/icon.png"
+
 # Deno is required by yt-dlp to solve YouTube's JavaScript challenges.
 # Without it only degraded/incomplete formats are available.
 ARG DENO_VERSION=latest
