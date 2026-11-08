@@ -26,21 +26,31 @@ def configured() -> bool:
 
 def status() -> dict:
     view = config.public_view()
+    empty = {
+        **view,
+        "reachable": False,
+        "version": "",
+        "indexed": 0,
+        "playlistCount": 0,
+        "error": "",
+    }
     if not view["configured"]:
-        return {**view, "reachable": False, "version": "", "indexed": 0}
+        return empty
     try:
         with NavidromeClient() as client:
             ping = client.ping()
-        indexed = nd_match.index_size()
+            playlists = client.playlists()
         return {
             **view,
             "reachable": True,
             "version": ping.get("version") or "",
-            "indexed": indexed,
+            "indexed": nd_match.index_size(),
+            "playlistCount": len(playlists),
+            "error": "",
         }
     except Exception as exc:
         logger.debug("Navidrome-Status: {}", exc)
-        return {**view, "reachable": False, "version": "", "indexed": 0, "error": str(exc)}
+        return {**empty, "error": str(exc)}
 
 
 def test_connection(url: str, username: str, password: str) -> dict:
@@ -51,7 +61,23 @@ def test_connection(url: str, username: str, password: str) -> dict:
         "password": password,
     }
     with NavidromeClient(trial) as client:
-        return client.ping()
+        ping = client.ping()
+        names: list[str] = []
+        count = 0
+        try:
+            playlists = client.playlists()
+            count = len(playlists)
+            names = [item.get("name") or "" for item in playlists[:8]]
+        except Exception as exc:
+            logger.debug("Playlists beim Verbindungstest: {}", exc)
+        return {
+            "ok": True,
+            "reachable": True,
+            "type": ping.get("type") or "navidrome",
+            "version": ping.get("version") or "",
+            "playlistCount": count,
+            "playlists": names,
+        }
 
 
 def save_connection(payload: dict) -> dict:
@@ -136,18 +162,39 @@ async def library() -> dict:
         return {"configured": False, "albums": [], "playlists": [], "recent": [], "artists": []}
 
     def load() -> dict:
+        albums: list = []
+        playlists: list = []
+        recent: list = []
+        errors: list[str] = []
         with NavidromeClient() as client:
-            return {
-                "configured": True,
-                "albums": client.album_list("recent", size=24),
-                "playlists": client.playlists(),
-                "recent": client.album_list("newest", size=12),
-                "artists": [],
-            }
+            try:
+                albums = client.album_list("recent", size=24)
+            except Exception as exc:
+                errors.append(str(exc))
+                logger.warning("Navidrome-Alben: {}", exc)
+            try:
+                playlists = client.playlists()
+            except Exception as exc:
+                errors.append(str(exc))
+                logger.warning("Navidrome-Playlists: {}", exc)
+            try:
+                recent = client.album_list("newest", size=12)
+            except Exception as exc:
+                logger.debug("Navidrome-Neuheiten: {}", exc)
+        result = {
+            "configured": True,
+            "albums": albums,
+            "playlists": playlists,
+            "recent": recent,
+            "artists": [],
+        }
+        if errors and not playlists:
+            result["error"] = errors[0]
+        return result
 
     try:
         return await run_in_threadpool(load)
-    except NavidromeError as exc:
+    except Exception as exc:
         logger.warning("Navidrome-Bibliothek: {}", exc)
         return {"configured": True, "error": str(exc), "albums": [], "playlists": [], "recent": [], "artists": []}
 

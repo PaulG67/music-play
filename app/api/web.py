@@ -754,6 +754,22 @@ async def navidrome_status(request: Request):
     return navidrome.status()
 
 
+@router.post("/navidrome/test")
+async def test_navidrome(request: Request, payload: dict | None = Body(None)):
+    _require_session(request)
+    payload = payload or {}
+    stored = navidrome_config.load()
+    url = (payload.get("url") or stored.get("url") or "").strip().rstrip("/")
+    username = (payload.get("username") or stored.get("username") or "").strip()
+    password = payload.get("password") or stored.get("password") or ""
+    if not url or not username or not password:
+        raise HTTPException(status_code=400, detail="URL, Benutzer und Passwort angeben")
+    try:
+        return await run_in_threadpool(navidrome.test_connection, url, username, password)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Verbindung fehlgeschlagen: {exc}")
+
+
 @router.put("/navidrome")
 async def save_navidrome(request: Request, payload: dict = Body(...)):
     _require_session(request)

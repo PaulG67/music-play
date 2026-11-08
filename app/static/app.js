@@ -1091,14 +1091,21 @@
     const [favorites, playlists, navidromeLibrary] = await Promise.all([
       api("/api/favorites").catch(() => ({ songs: [] })),
       api("/api/playlists").catch(() => ({ playlists: [], account: [] })),
-      api("/api/navidrome/library").catch(() => ({ configured: false })),
+      api("/api/navidrome/library").catch(async () => {
+        const status = await api("/api/navidrome").catch(() => state.navidrome || {});
+        return {
+          configured: Boolean(status && status.configured),
+          playlists: [],
+          error: "Navidrome-Bibliothek nicht ladbar",
+        };
+      }),
     ]);
 
     const own = (playlists.playlists || []).map(localPlaylistEntry);
     const youtube = (playlists.account || []).map(youtubePlaylistEntry);
-    const navidrome = navidromeLibrary.configured
-      ? (navidromeLibrary.playlists || []).map(navidromePlaylistEntry)
-      : [];
+    const ndConfigured = Boolean(navidromeLibrary.configured || navidromeReady());
+    const navidrome = (navidromeLibrary.playlists || []).map(navidromePlaylistEntry);
+    if (ndConfigured) state.navidrome = { ...(state.navidrome || {}), configured: true };
     state.playlists = playlists.playlists || [];
     fillSidebarPlaylists([...own, ...navidrome, ...youtube]);
 
@@ -1144,6 +1151,17 @@
       if (filter === "all" && !query) tiles.push(playlistTile(liked), playlistTile(createCard));
       items.forEach((item) => tiles.push(playlistTile(item)));
 
+      if (!items.length && filter === "navidrome") {
+        results.replaceChildren(
+          element("div", {
+            class: "empty",
+            text:
+              navidromeLibrary.error ||
+              "In Navidrome sind keine Playlists sichtbar. Unter Mehr die Verbindung testen.",
+          })
+        );
+        return;
+      }
       if (!items.length && (query || filter !== "all")) {
         results.replaceChildren(element("div", { class: "empty", text: "Keine Playlists zu diesem Filter." }));
         return;
@@ -1169,12 +1187,23 @@
     const filters = [
       ["all", "Alle"],
       ["local", "Deine"],
-      navidrome.length ? ["navidrome", "Navidrome"] : null,
+      ndConfigured ? ["navidrome", navidrome.length ? `Navidrome · ${navidrome.length}` : "Navidrome"] : null,
       youtube.length ? ["youtube", "YouTube Music"] : null,
     ].filter(Boolean);
 
     $("view").replaceChildren(
-      pageHead("Playlists", `${catalog.all.length} Listen · Favoriten, Navidrome und YouTube Music`),
+      pageHead(
+        "Playlists",
+        ndConfigured
+          ? `${catalog.all.length} Listen · ${navidrome.length} von Navidrome`
+          : `${catalog.all.length} Listen · Favoriten und eigene Playlists`
+      ),
+      navidromeLibrary.error
+        ? element("div", { class: "connection-status bad" }, [
+            element("strong", { text: "Navidrome-Playlists nicht geladen" }),
+            element("span", { text: navidromeLibrary.error }),
+          ])
+        : null,
       element("div", { class: "playlist-toolbar" }, [
         search,
         element("button", {
@@ -1453,19 +1482,52 @@
     );
   }
 
+  function navidromeStatusBox(nd) {
+    const reachable = Boolean(nd.reachable);
+    const configured = Boolean(nd.configured);
+    let title = "Nicht konfiguriert";
+    let detail = "URL, Benutzer und Passwort eintragen, dann testen.";
+    let kind = "idle";
+    if (configured && reachable) {
+      kind = "ok";
+      title = "Verbindung steht";
+      const bits = [];
+      if (nd.version) bits.push(nd.version);
+      if (nd.playlistCount != null) bits.push(`${nd.playlistCount} Playlists`);
+      if ((nd.playlists || []).length) bits.push((nd.playlists || []).slice(0, 3).join(", "));
+      detail = bits.length ? bits.join(" · ") : "Navidrome antwortet.";
+    } else if (configured) {
+      kind = "bad";
+      title = "Keine Verbindung";
+      detail = nd.error || "Navidrome antwortet nicht. URL und Zugangsdaten prüfen.";
+    }
+    return element("div", { class: `connection-status ${kind}`, id: "nd-status" }, [
+      element("strong", { text: title }),
+      element("span", { text: detail }),
+    ]);
+  }
+
   function navidromeSettings(status) {
     const nd = status.navidrome || {};
     state.navidrome = nd;
+
+    async function navidromePayload() {
+      return {
+        url: $("nd-url").value.trim(),
+        username: $("nd-user").value.trim(),
+        password: $("nd-pass").value,
+        importFolder: $("nd-folder").value.trim() || "YouTube",
+        musicDir: nd.musicDir,
+      };
+    }
+
     return element("div", { class: "section" }, [
       element("h2", { text: "Navidrome" }),
       element("p", {
         class: "muted",
-        text: nd.configured
-          ? nd.reachable
-            ? "Suche und Vorschläge kommen von YouTube Music. Vorhandene Titel spielt Navidrome. Downloads laufen über MediaSync in deine Bibliothek."
-            : "Gespeichert, aber Navidrome antwortet nicht. URL und Zugangsdaten prüfen."
-          : "URL, Benutzer und Passwort deines Navidrome eintragen. Musikordner denselben Share wie Navidrome nach /music einhängen.",
+        text: "Suche und Vorschläge kommen von YouTube Music. Vorhandene Titel und Playlists kommen aus Navidrome.",
       }),
+      navidromeStatusBox(nd),
       element("div", { class: "settings-form" }, [
         element("input", {
           type: "url",
@@ -1501,29 +1563,57 @@
                 : `Musikordner nicht beschreibbar (${nd.musicDir}). In Unraid denselben Pfad wie Navidrome als /music einhängen.`,
             })
           : null,
-        element("button", {
-          class: "chip solid",
-          text: "Verbinden",
-          onclick: async () => {
-            try {
-              const data = await api("/api/navidrome", {
-                method: "PUT",
-                body: {
-                  url: $("nd-url").value.trim(),
-                  username: $("nd-user").value.trim(),
-                  password: $("nd-pass").value,
-                  importFolder: $("nd-folder").value.trim() || "YouTube",
-                  musicDir: nd.musicDir,
-                },
-              });
-              state.navidrome = data;
-              toast(data.reachable ? "Navidrome verbunden" : "Gespeichert");
-              render(state.route, true);
-            } catch (error) {
-              toast(error.message);
-            }
-          },
-        }),
+        element("div", { class: "row-buttons" }, [
+          element("button", {
+            class: "chip",
+            id: "nd-test",
+            text: "Verbindung testen",
+            onclick: async (event) => {
+              const button = event.currentTarget;
+              button.disabled = true;
+              button.textContent = "Testet …";
+              try {
+                const data = await api("/api/navidrome/test", { method: "POST", body: await navidromePayload() });
+                state.navidrome = { ...nd, ...data, configured: true, reachable: true };
+                const box = $("nd-status");
+                if (box) box.replaceWith(navidromeStatusBox(state.navidrome));
+                toast(
+                  data.playlistCount
+                    ? `Verbunden · ${data.playlistCount} Playlists`
+                    : "Verbunden, aber keine Playlists gefunden"
+                );
+              } catch (error) {
+                const box = $("nd-status");
+                if (box) {
+                  box.replaceWith(
+                    navidromeStatusBox({ configured: true, reachable: false, error: error.message })
+                  );
+                }
+                toast(error.message);
+              } finally {
+                button.disabled = false;
+                button.textContent = "Verbindung testen";
+              }
+            },
+          }),
+          element("button", {
+            class: "chip solid",
+            text: "Speichern",
+            onclick: async () => {
+              try {
+                const data = await api("/api/navidrome", {
+                  method: "PUT",
+                  body: await navidromePayload(),
+                });
+                state.navidrome = data;
+                toast(data.reachable ? "Navidrome gespeichert und verbunden" : "Gespeichert");
+                render(state.route, true);
+              } catch (error) {
+                toast(error.message);
+              }
+            },
+          }),
+        ]),
       ]),
     ]);
   }

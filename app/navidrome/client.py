@@ -25,12 +25,23 @@ class NavidromeError(RuntimeError):
         self.status_code = status_code
 
 
-def _as_list(value: Any) -> list:
+def _as_list(value) -> list:
     if value is None:
         return []
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _collection(body: dict, wrapper: str, item: str) -> list:
+    """Subsonic JSON is inconsistent: one item is an object, many are a list,
+    and some servers skip the wrapper entirely."""
+    block = (body or {}).get(wrapper)
+    if isinstance(block, list):
+        return block
+    if isinstance(block, dict):
+        return _as_list(block.get(item))
+    return _as_list((body or {}).get(item))
 
 
 def _cover_url(cover_id: str | None) -> str | None:
@@ -241,21 +252,99 @@ class NavidromeClient:
 
     def album_list(self, list_type: str = "recent", size: int = 24, offset: int = 0) -> list[dict]:
         body = self._rest("getAlbumList2", {"type": list_type, "size": size, "offset": offset})
-        listing = body.get("albumList2") or {}
-        return [map_album(item) for item in _as_list(listing.get("album"))]
+        return [map_album(item) for item in _collection(body, "albumList2", "album")]
 
     def playlists(self) -> list[dict]:
-        body = self._rest("getPlaylists")
-        listing = body.get("playlists") or {}
-        return [map_playlist(item) for item in _as_list(listing.get("playlist"))]
+        items: list[dict] = []
+        try:
+            body = self._rest("getPlaylists")
+            items = _collection(body, "playlists", "playlist")
+        except NavidromeError as exc:
+            logger.debug("getPlaylists (Subsonic): {}", exc)
+        if not items:
+            items = self._native_playlists()
+        return [map_playlist(item) for item in items]
+
+    def _native_playlists(self) -> list[dict]:
+        token = self.login_native()
+        if not token:
+            return []
+        headers = {"x-nd-authorization": f"Bearer {token}"}
+        try:
+            response = self._http.get(
+                f"{self.base}/api/playlist",
+                params={"_start": 0, "_end": 500, "_sort": "name", "_order": "ASC"},
+                headers=headers,
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            batch = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.debug("Navidrome /api/playlist nicht verfügbar: {}", exc)
+            return []
+        if not isinstance(batch, list):
+            return []
+        rows = []
+        for raw in batch:
+            rows.append(
+                {
+                    "id": str(raw.get("id") or ""),
+                    "name": raw.get("name") or "",
+                    "comment": raw.get("comment") or "",
+                    "songCount": raw.get("songCount") or 0,
+                    "duration": raw.get("duration") or 0,
+                    "owner": raw.get("ownerName") or raw.get("owner") or "",
+                    "coverArt": raw.get("coverArtId") or raw.get("id"),
+                }
+            )
+        return rows
 
     def get_playlist(self, playlist_id: str) -> dict | None:
-        body = self._rest("getPlaylist", {"id": playlist_id})
-        raw = body.get("playlist")
-        if not raw:
+        try:
+            body = self._rest("getPlaylist", {"id": playlist_id})
+            raw = body.get("playlist")
+            if raw:
+                playlist = map_playlist(raw)
+                playlist["tracks"] = [map_song(item) for item in _as_list(raw.get("entry"))]
+                playlist["song_count"] = len(playlist["tracks"])
+                return playlist
+        except NavidromeError as exc:
+            logger.debug("getPlaylist (Subsonic): {}", exc)
+        return self._native_playlist(playlist_id)
+
+    def _native_playlist(self, playlist_id: str) -> dict | None:
+        token = self.login_native()
+        if not token:
             return None
-        playlist = map_playlist(raw)
-        playlist["tracks"] = [map_song(item) for item in _as_list(raw.get("entry"))]
+        headers = {"x-nd-authorization": f"Bearer {token}"}
+        try:
+            meta = self._http.get(f"{self.base}/api/playlist/{playlist_id}", headers=headers, timeout=30.0)
+            meta.raise_for_status()
+            raw = meta.json() or {}
+            tracks_resp = self._http.get(
+                f"{self.base}/api/playlist/{playlist_id}/tracks",
+                params={"_start": 0, "_end": 2000, "_sort": "id", "_order": "ASC"},
+                headers=headers,
+                timeout=30.0,
+            )
+            entries = tracks_resp.json() if tracks_resp.is_success else []
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.debug("Navidrome Playlist {} nativ nicht ladbar: {}", playlist_id, exc)
+            return None
+        if not isinstance(entries, list):
+            entries = []
+        playlist = map_playlist(
+            {
+                "id": str(raw.get("id") or playlist_id),
+                "name": raw.get("name") or "",
+                "comment": raw.get("comment") or "",
+                "songCount": raw.get("songCount") or len(entries),
+                "duration": raw.get("duration") or 0,
+                "owner": raw.get("ownerName") or raw.get("owner") or "",
+                "coverArt": raw.get("coverArtId") or raw.get("id") or playlist_id,
+            }
+        )
+        playlist["tracks"] = [map_song(item) for item in entries]
         playlist["song_count"] = len(playlist["tracks"])
         return playlist
 

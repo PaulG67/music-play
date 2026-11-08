@@ -1106,6 +1106,26 @@ input[type="range"]::-moz-range-thumb {
 }
 .settings-form .row-buttons { display: flex; flex-wrap: wrap; gap: 8px; }
 
+.connection-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.connection-status strong { font-size: 14px; }
+.connection-status span { font-size: 13px; color: var(--text-dim); }
+.connection-status.ok {
+  background: var(--accent-soft);
+}
+.connection-status.ok strong { color: var(--accent-hover); }
+.connection-status.bad {
+  background: rgba(255, 80, 80, 0.14);
+}
+.connection-status.bad strong { color: #ff8a8a; }
+
 /* ------------------------------------------------------------ toast/sheet */
 
 .toast {
