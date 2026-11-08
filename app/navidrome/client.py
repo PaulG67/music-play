@@ -254,49 +254,72 @@ class NavidromeClient:
         body = self._rest("getAlbumList2", {"type": list_type, "size": size, "offset": offset})
         return [map_album(item) for item in _collection(body, "albumList2", "album")]
 
-    def playlists(self) -> list[dict]:
-        items: list[dict] = []
-        try:
-            body = self._rest("getPlaylists")
-            items = _collection(body, "playlists", "playlist")
-        except NavidromeError as exc:
-            logger.debug("getPlaylists (Subsonic): {}", exc)
-        if not items:
-            items = self._native_playlists()
-        return [map_playlist(item) for item in items]
-
-    def _native_playlists(self) -> list[dict]:
+    def _native_headers(self) -> dict[str, str] | None:
         token = self.login_native()
         if not token:
-            return []
-        headers = {"x-nd-authorization": f"Bearer {token}"}
+            return None
+        return {
+            "x-nd-authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token}",
+        }
+
+    def playlists(self) -> list[dict]:
+        by_id: dict[str, dict] = {}
         try:
-            response = self._http.get(
-                f"{self.base}/api/playlist",
-                params={"_start": 0, "_end": 500, "_sort": "name", "_order": "ASC"},
-                headers=headers,
-                timeout=30.0,
-            )
-            response.raise_for_status()
-            batch = response.json()
-        except (httpx.HTTPError, ValueError) as exc:
-            logger.debug("Navidrome /api/playlist nicht verfügbar: {}", exc)
+            body = self._rest("getPlaylists")
+            for raw in _collection(body, "playlists", "playlist"):
+                playlist_id = str(raw.get("id") or "")
+                if playlist_id:
+                    by_id[playlist_id] = raw
+        except NavidromeError as exc:
+            logger.debug("getPlaylists (Subsonic): {}", exc)
+        for raw in self._native_playlists():
+            playlist_id = str(raw.get("id") or "")
+            if playlist_id:
+                by_id[playlist_id] = raw
+        mapped = [map_playlist(item) for item in by_id.values()]
+        mapped.sort(key=lambda item: (item.get("name") or "").casefold())
+        return mapped
+
+    def _native_playlists(self) -> list[dict]:
+        headers = self._native_headers()
+        if not headers:
             return []
-        if not isinstance(batch, list):
-            return []
-        rows = []
-        for raw in batch:
-            rows.append(
-                {
-                    "id": str(raw.get("id") or ""),
-                    "name": raw.get("name") or "",
-                    "comment": raw.get("comment") or "",
-                    "songCount": raw.get("songCount") or 0,
-                    "duration": raw.get("duration") or 0,
-                    "owner": raw.get("ownerName") or raw.get("owner") or "",
-                    "coverArt": raw.get("coverArtId") or raw.get("id"),
-                }
-            )
+        rows: list[dict] = []
+        start = 0
+        page = 100
+        while start < 10000:
+            try:
+                response = self._http.get(
+                    f"{self.base}/api/playlist",
+                    params={"_start": start, "_end": start + page},
+                    headers=headers,
+                    timeout=30.0,
+                )
+                response.raise_for_status()
+                batch = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                if start == 0:
+                    logger.warning("Navidrome /api/playlist nicht verfügbar: {}", exc)
+                break
+            if not isinstance(batch, list) or not batch:
+                break
+            for raw in batch:
+                rows.append(
+                    {
+                        "id": str(raw.get("id") or ""),
+                        "name": raw.get("name") or "",
+                        "comment": raw.get("comment") or "",
+                        "songCount": raw.get("songCount") or len(raw.get("tracks") or []) or 0,
+                        "duration": raw.get("duration") or 0,
+                        "owner": raw.get("ownerName") or raw.get("owner") or "",
+                        "coverArt": raw.get("coverArtId") or raw.get("id"),
+                    }
+                )
+            if len(batch) < page:
+                break
+            start += page
+        logger.info("Navidrome-Playlists nativ: {}", len(rows))
         return rows
 
     def get_playlist(self, playlist_id: str) -> dict | None:
@@ -369,7 +392,27 @@ class NavidromeClient:
         return str(created.get("id") or playlist_id or "")
 
     def delete_playlist(self, playlist_id: str) -> None:
-        self._rest("deletePlaylist", {"id": playlist_id})
+        raw_id = nd_ids.unwrap(playlist_id) or playlist_id
+        headers = self._native_headers()
+        last_error = None
+        if headers:
+            try:
+                response = self._http.delete(
+                    f"{self.base}/api/playlist/{raw_id}",
+                    headers=headers,
+                    timeout=30.0,
+                )
+                if response.status_code in {200, 202, 204, 404}:
+                    return
+                last_error = f"HTTP {response.status_code}: {response.text[:180]}"
+            except httpx.HTTPError as exc:
+                last_error = str(exc)
+        try:
+            self._rest("deletePlaylist", {"id": raw_id})
+            return
+        except NavidromeError as exc:
+            last_error = str(exc)
+        raise NavidromeError(f"Playlist konnte in Navidrome nicht gelöscht werden: {last_error or raw_id}")
 
     def start_scan(self) -> None:
         try:
@@ -402,11 +445,14 @@ class NavidromeClient:
             )
             response.raise_for_status()
             payload = response.json()
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.warning("Navidrome-Login fehlgeschlagen: {}", exc)
             return None
-        token = payload.get("token")
+        token = payload.get("token") or (payload.get("data") or {}).get("token")
         if token:
             self._jwt = token
+        else:
+            logger.warning("Navidrome-Login ohne Token: {}", list(payload)[:8])
         return self._jwt
 
     def list_songs(self, limit: int = 20000, page: int = 500) -> list[dict]:

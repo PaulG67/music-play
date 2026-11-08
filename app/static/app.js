@@ -210,7 +210,7 @@
     const items = playlists || [];
     state.sidebarPlaylists = items;
     box.replaceChildren(
-      ...items.slice(0, 30).map((playlist) =>
+      ...items.map((playlist) =>
         element("div", { class: "sidebar-playlist-row" }, [
           element("button", {
             class: "sidebar-link",
@@ -1008,14 +1008,14 @@
   }
 
   function navidromePlaylistEntry(playlist) {
-    const id = String(playlist.id).replace(/^nd:/, "");
+    const id = String(playlist.navidromeId || playlist.id || "").replace(/^nd:/, "");
     return {
       id,
       name: playlist.name,
       thumbnail: playlist.thumbnail,
       song_count: playlist.song_count || 0,
       source: "navidrome",
-      sourceLabel: "Navidrome",
+      sourceLabel: playlist.owner ? `Navidrome · ${playlist.owner}` : "Navidrome",
       route: { name: "nplaylist", id },
     };
   }
