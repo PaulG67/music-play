@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>Music Play 1.5.0</title>
+  <title>Music Play 1.6.0</title>
 
   <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -36,6 +36,10 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13m0-2a8.5 8.5 0 1 0 5.4 15.1l4.8 4.8 1.4-1.4-4.8-4.8A8.5 8.5 0 0 0 10.5 2z"/></svg>
         Suche
       </button>
+      <button data-route="playlists">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3V5zm0 6h12v2H3v-2zm0 6h18v2H3v-2zm16.2-7.2 4.3 2.7-4.3 2.7v-5.4z"/></svg>
+        Playlists
+      </button>
       <button data-route="explore">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2zm3.8 6.2-1.6 7.2-7.2 1.6 1.6-7.2 7.2-1.6z"/></svg>
         Entdecken
@@ -49,8 +53,8 @@
         Mehr
       </button>
     </nav>
-    <div id="sidebar-playlists" class="sidebar-playlists" hidden>
-      <p class="sidebar-label">Playlists</p>
+    <div id="sidebar-playlists" class="sidebar-playlists">
+      <button class="sidebar-label" id="sidebar-playlists-open">Playlists</button>
       <div id="sidebar-playlist-list"></div>
     </div>
   </aside>

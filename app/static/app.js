@@ -157,33 +157,46 @@
     document.title = title === "Start" ? "Music Play" : `${title} · Music Play`;
   }
 
+  const NAV_ROUTES = ["home", "search", "playlists", "explore", "library", "settings"];
+
   function setActiveNav(routeName) {
-    const top = ["home", "search", "explore", "library", "settings"].includes(routeName)
-      ? routeName
-      : state.stack.find((item) => ["home", "search", "explore", "library", "settings"].includes(item.name))?.name;
+    const playlistRoutes = ["playlists", "playlist", "nplaylist", "ytplaylist", "liked"];
+    const mapped = playlistRoutes.includes(routeName) ? "playlists" : routeName;
+    const top = NAV_ROUTES.includes(mapped)
+      ? mapped
+      : state.stack.find((item) => NAV_ROUTES.includes(item.name))?.name;
     document.querySelectorAll("#nav button").forEach((button) => {
-      button.classList.toggle("active", button.dataset.route === (top || routeName));
+      button.classList.toggle("active", button.dataset.route === (top || mapped));
     });
   }
 
   function fillSidebarPlaylists(playlists) {
     const box = $("sidebar-playlist-list");
-    const wrap = $("sidebar-playlists");
-    if (!box || !wrap) return;
+    if (!box) return;
     const items = playlists || [];
-    wrap.hidden = items.length === 0;
     box.replaceChildren(
-      ...items.slice(0, 24).map((playlist) =>
+      ...items.slice(0, 30).map((playlist) =>
         element("button", {
           class: "sidebar-link",
           text: playlist.name,
           onclick: () => {
             state.stack = [];
-            navigate({ name: "playlist", id: playlist.id }, { replace: true });
+            navigate(playlist.route || { name: "playlist", id: playlist.id }, { replace: true });
           },
         })
       )
     );
+  }
+
+  async function createPlaylist() {
+    const name = prompt("Name der Playlist");
+    if (!name) return null;
+    const created = await api("/api/playlists", { method: "POST", body: { name, tracks: [] } });
+    const data = await api("/api/playlists").catch(() => ({ playlists: [] }));
+    state.playlists = data.playlists || [];
+    fillSidebarPlaylists((data.playlists || []).map(localPlaylistEntry));
+    toast(`„${name}“ erstellt`);
+    return created;
   }
 
   function greeting() {
@@ -220,6 +233,11 @@
   });
 
   $("reload-button").addEventListener("click", () => state.route && render(state.route, true));
+  $("sidebar-playlists-open")?.addEventListener("click", () => {
+    state.stack = [];
+    state.route = { name: "playlists" };
+    render(state.route);
+  });
 
   document.querySelectorAll("#nav button").forEach((button) => {
     button.addEventListener("click", () => {
@@ -236,6 +254,8 @@
     search: renderSearch,
     explore: renderExplore,
     library: renderLibrary,
+    playlists: renderPlaylistsHub,
+    liked: renderLiked,
     settings: renderSettings,
     album: (route) => renderAlbum(route.id),
     artist: (route) => renderArtist(route.id),
@@ -808,7 +828,7 @@
         if (!confirm(`Playlist "${playlist.name}" löschen?`)) return;
         await api(`/api/playlist/${playlistId}`, { method: "DELETE" });
         state.stack.pop();
-        navigate({ name: "library" }, { replace: true });
+        navigate({ name: "playlists" }, { replace: true });
       },
     });
 
@@ -927,6 +947,271 @@
     );
   }
 
+  function localPlaylistEntry(playlist) {
+    return {
+      id: playlist.id,
+      name: playlist.name,
+      thumbnail: playlist.thumbnail,
+      song_count: playlist.song_count || 0,
+      source: "local",
+      sourceLabel: "Deine Playlist",
+      route: { name: "playlist", id: playlist.id },
+    };
+  }
+
+  function navidromePlaylistEntry(playlist) {
+    const id = String(playlist.id).replace(/^nd:/, "");
+    return {
+      id,
+      name: playlist.name,
+      thumbnail: playlist.thumbnail,
+      song_count: playlist.song_count || 0,
+      source: "navidrome",
+      sourceLabel: "Navidrome",
+      route: { name: "nplaylist", id },
+    };
+  }
+
+  function youtubePlaylistEntry(playlist) {
+    return {
+      id: playlist.id,
+      name: playlist.name || playlist.title,
+      thumbnail: playlist.thumbnail,
+      song_count: playlist.song_count || 0,
+      source: "youtube",
+      sourceLabel: "YouTube Music",
+      route: { name: "ytplaylist", id: playlist.id, title: playlist.name || playlist.title },
+    };
+  }
+
+  async function playPlaylistEntry(entry) {
+    try {
+      let tracks = entry.tracks;
+      if (!tracks) {
+        if (entry.route.name === "playlist") {
+          tracks = (await api(`/api/playlist/${encodeURIComponent(entry.route.id)}`)).tracks;
+        } else if (entry.route.name === "nplaylist") {
+          tracks = (await api(`/api/navidrome/playlist/${encodeURIComponent(entry.route.id)}`)).tracks;
+        } else if (entry.route.name === "ytplaylist") {
+          tracks = (await api(`/api/ytplaylist/${encodeURIComponent(entry.route.id)}`)).tracks;
+        } else if (entry.route.name === "liked") {
+          tracks = (await api("/api/favorites")).songs;
+        }
+      }
+      if (!tracks || !tracks.length) {
+        toast("Playlist ist leer");
+        return;
+      }
+      Player.play(tracks, 0);
+    } catch (error) {
+      toast(error.message || "Playlist nicht ladbar");
+    }
+  }
+
+  function playlistCover(entry) {
+    if (entry.cover === "liked") {
+      return element("div", {
+        class: "playlist-cover liked",
+        html: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21 3.6 12.8A5.4 5.4 0 0 1 12 5.2a5.4 5.4 0 0 1 8.4 7.6z"/></svg>',
+      });
+    }
+    if (entry.cover === "create") {
+      return element("div", {
+        class: "playlist-cover create",
+        html: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>',
+      });
+    }
+    if (entry.thumbnail) return cover(entry.thumbnail, 200);
+    return element("div", {
+      class: "playlist-cover",
+      html: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3V5zm0 6h12v2H3v-2zm0 6h18v2H3v-2zm16.2-7.2 4.3 2.7-4.3 2.7v-5.4z"/></svg>',
+    });
+  }
+
+  function playlistTile(entry) {
+    return element(
+      "div",
+      {
+        class: `card playlist-tile${entry.cover === "create" ? " create" : ""}`,
+        role: "button",
+        tabindex: "0",
+        onclick: () => (entry.onclick ? entry.onclick() : navigate(entry.route)),
+      },
+      [
+        element("div", { class: "card-art" }, [
+          playlistCover(entry),
+          entry.cover === "create"
+            ? null
+            : element("button", {
+                class: "card-play",
+                "aria-label": "Abspielen",
+                html: PLAY_ICON,
+                onclick: (event) => {
+                  event.stopPropagation();
+                  playPlaylistEntry(entry);
+                },
+              }),
+        ]),
+        element("strong", { text: entry.name }),
+        element("span", {
+          text: [entry.sourceLabel, entry.song_count != null ? `${entry.song_count} Titel` : null]
+            .filter(Boolean)
+            .join(" · "),
+        }),
+      ]
+    );
+  }
+
+  async function renderLiked() {
+    setTitle("Lieblingstitel");
+    loading();
+    const favorites = await api("/api/favorites");
+    const tracks = favorites.songs || [];
+    $("view").replaceChildren(
+      playAllHeader("Lieblingstitel", `${tracks.length} Titel`, null, tracks, [], "Playlist"),
+      tracks.length ? trackList(tracks) : element("div", { class: "empty", text: "Noch keine Favoriten." })
+    );
+    const heroImg = $("view").querySelector(".hero img");
+    if (heroImg) {
+      const placeholder = element("div", {
+        class: "playlist-cover liked",
+        html: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21 3.6 12.8A5.4 5.4 0 0 1 12 5.2a5.4 5.4 0 0 1 8.4 7.6z"/></svg>',
+      });
+      placeholder.style.width = "min(232px, 38vw)";
+      placeholder.style.height = "min(232px, 38vw)";
+      placeholder.style.flex = "0 0 auto";
+      heroImg.replaceWith(placeholder);
+    }
+  }
+
+  async function renderPlaylistsHub() {
+    setTitle("Playlists");
+    loading();
+
+    const [favorites, playlists, navidromeLibrary] = await Promise.all([
+      api("/api/favorites").catch(() => ({ songs: [] })),
+      api("/api/playlists").catch(() => ({ playlists: [], account: [] })),
+      api("/api/navidrome/library").catch(() => ({ configured: false })),
+    ]);
+
+    const own = (playlists.playlists || []).map(localPlaylistEntry);
+    const youtube = (playlists.account || []).map(youtubePlaylistEntry);
+    const navidrome = navidromeLibrary.configured
+      ? (navidromeLibrary.playlists || []).map(navidromePlaylistEntry)
+      : [];
+    state.playlists = playlists.playlists || [];
+    fillSidebarPlaylists([...own, ...navidrome, ...youtube]);
+
+    const liked = {
+      name: "Lieblingstitel",
+      song_count: (favorites.songs || []).length,
+      source: "liked",
+      sourceLabel: "Deine Playlist",
+      cover: "liked",
+      route: { name: "liked" },
+      tracks: favorites.songs || [],
+    };
+    const createCard = {
+      name: "Neue Playlist",
+      sourceLabel: "Liste anlegen",
+      cover: "create",
+      onclick: async () => {
+        try {
+          const created = await createPlaylist();
+          if (!created) return;
+          const id = created && created.id;
+          if (id) navigate({ name: "playlist", id });
+          else render({ name: "playlists" }, true);
+        } catch (error) {
+          toast(error.message);
+        }
+      },
+    };
+
+    const catalog = { all: [...own, ...navidrome, ...youtube], local: own, navidrome, youtube };
+    renderPlaylistsHub.filter = renderPlaylistsHub.filter || "all";
+    renderPlaylistsHub.query = renderPlaylistsHub.query || "";
+
+    const results = element("div", { class: "playlist-grid" });
+
+    function paint() {
+      const filter = renderPlaylistsHub.filter;
+      const query = (renderPlaylistsHub.query || "").trim().toLowerCase();
+      let items = catalog[filter] || catalog.all;
+      if (query) items = items.filter((item) => String(item.name || "").toLowerCase().includes(query));
+
+      const tiles = [];
+      if (filter === "all" && !query) tiles.push(playlistTile(liked), playlistTile(createCard));
+      items.forEach((item) => tiles.push(playlistTile(item)));
+
+      if (!items.length && (query || filter !== "all")) {
+        results.replaceChildren(element("div", { class: "empty", text: "Keine Playlists zu diesem Filter." }));
+        return;
+      }
+      if (!items.length && filter === "all") {
+        results.replaceChildren(playlistTile(liked), playlistTile(createCard));
+        return;
+      }
+      results.replaceChildren(...tiles);
+    }
+
+    const search = element("input", {
+      class: "playlist-search",
+      type: "search",
+      placeholder: "Playlists durchsuchen",
+      value: renderPlaylistsHub.query || "",
+      oninput: (event) => {
+        renderPlaylistsHub.query = event.target.value;
+        paint();
+      },
+    });
+
+    const filters = [
+      ["all", "Alle"],
+      ["local", "Deine"],
+      navidrome.length ? ["navidrome", "Navidrome"] : null,
+      youtube.length ? ["youtube", "YouTube Music"] : null,
+    ].filter(Boolean);
+
+    $("view").replaceChildren(
+      pageHead("Playlists", `${catalog.all.length} Listen · Favoriten, Navidrome und YouTube Music`),
+      element("div", { class: "playlist-toolbar" }, [
+        search,
+        element("button", {
+          class: "chip solid",
+          text: "+ Neue Playlist",
+          onclick: async () => {
+            try {
+              const created = await createPlaylist();
+              if (!created) return;
+              render({ name: "playlists" }, true);
+            } catch (error) {
+              toast(error.message);
+            }
+          },
+        }),
+      ]),
+      element(
+        "div",
+        { class: "search-filters" },
+        filters.map(([key, label]) =>
+          element("button", {
+            class: `chip${key === renderPlaylistsHub.filter ? " active" : ""}`,
+            text: label,
+            onclick: (event) => {
+              renderPlaylistsHub.filter = key;
+              event.currentTarget.parentElement.querySelectorAll(".chip").forEach((chip) => chip.classList.remove("active"));
+              event.currentTarget.classList.add("active");
+              paint();
+            },
+          })
+        )
+      ),
+      results
+    );
+    paint();
+  }
+
   async function renderLibrary() {
     setTitle("Bibliothek");
     loading();
@@ -937,106 +1222,38 @@
       api("/api/navidrome/library").catch(() => ({ configured: false })),
     ]);
     const libraryPlaylists = playlists.playlists || [];
-    const accountPlaylists = playlists.account || [];
     const likedSongs = favorites.songs || [];
     const recentSongs = favorites.recent || [];
     const frequentSongs = favorites.most || [];
     const likedAlbums = favorites.albums || [];
     const likedArtists = favorites.artists || [];
     state.playlists = libraryPlaylists;
-    fillSidebarPlaylists(libraryPlaylists);
+    fillSidebarPlaylists(libraryPlaylists.map(localPlaylistEntry));
 
     const fragment = document.createDocumentFragment();
 
     fragment.append(
-      pageHead("Mediathek", "Favoriten, Playlists und deine Bibliothek"),
+      pageHead("Mediathek", "Favoriten, Alben und deine Bibliothek"),
       element("div", { class: "chips" }, [
         element("button", {
           class: "chip solid",
+          text: "Playlists",
+          onclick: () => navigate({ name: "playlists" }),
+        }),
+        element("button", {
+          class: "chip",
           text: `↓ Offline (${Offline.tracks().length})`,
           onclick: () => navigate({ name: "offline" }),
         }),
-        element("button", { class: "chip", text: "📊 Statistiken", onclick: () => navigate({ name: "stats" }) }),
-        element("button", {
-          class: "chip",
-          text: "+ Neue Playlist",
-          onclick: async () => {
-            const name = prompt("Name der Playlist");
-            if (!name) return;
-            await api("/api/playlists", { method: "POST", body: { name, tracks: [] } });
-            render(state.route, true);
-          },
-        }),
+        element("button", { class: "chip", text: "Statistiken", onclick: () => navigate({ name: "stats" }) }),
       ])
     );
 
-    if (navidromeLibrary.configured && (navidromeLibrary.playlists || []).length) {
-      fragment.append(
-        element("div", { class: "section" }, [
-          element("h2", { text: "Navidrome-Playlists" }),
-          ...navidromeLibrary.playlists.map((playlist) =>
-            element(
-              "button",
-              {
-                class: "list-card",
-                onclick: () => navigate({ name: "nplaylist", id: String(playlist.id).replace(/^nd:/, "") }),
-              },
-              [
-                cover(playlist.thumbnail, 46),
-                element("div", {}, [
-                  element("strong", { text: playlist.name }),
-                  element("span", { text: `${playlist.song_count || 0} Titel` }),
-                ]),
-              ]
-            )
-          ),
-        ])
-      );
-    }
     if (navidromeLibrary.configured && (navidromeLibrary.albums || []).length) {
       fragment.append(
         element("div", { class: "section" }, [
           element("h2", { text: "Zuletzt in Navidrome" }),
           element("div", { class: "row" }, navidromeLibrary.albums.map(itemCard)),
-        ])
-      );
-    }
-
-    const playlistCards = libraryPlaylists.map((playlist) =>
-      element("button", { class: "list-card", onclick: () => navigate({ name: "playlist", id: playlist.id }) }, [
-        cover(playlist.thumbnail, 46),
-        element("div", {}, [
-          element("strong", { text: playlist.name }),
-          element("span", { text: `${playlist.song_count} Titel` }),
-        ]),
-      ])
-    );
-    if (playlistCards.length) {
-      fragment.append(
-        element("div", { class: "section" }, [element("h2", { text: "Playlists" }), ...playlistCards])
-      );
-    }
-
-    if (accountPlaylists.length) {
-      fragment.append(
-        element("div", { class: "section" }, [
-          element("h2", { text: "YouTube-Music-Konto" }),
-          ...accountPlaylists.map((playlist) =>
-            element(
-              "button",
-              {
-                class: "list-card",
-                onclick: () => navigate({ name: "ytplaylist", id: playlist.id, title: playlist.name }),
-              },
-              [
-                cover(playlist.thumbnail, 46),
-                element("div", {}, [
-                  element("strong", { text: playlist.name }),
-                  element("span", { text: `${playlist.song_count} Titel` }),
-                ]),
-              ]
-            )
-          ),
         ])
       );
     }
@@ -2692,8 +2909,8 @@
 
     api("/api/playlists")
       .then((data) => {
-        state.playlists = data.playlists;
-        fillSidebarPlaylists(data.playlists);
+        state.playlists = data.playlists || [];
+        fillSidebarPlaylists((data.playlists || []).map(localPlaylistEntry));
       })
       .catch(() => {});
     api("/api/navidrome")
