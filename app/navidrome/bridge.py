@@ -289,6 +289,16 @@ def delete_remote_playlist(navidrome_id: str | None) -> None:
         logger.debug("Navidrome-Playlist nicht gelöscht: {}", exc)
 
 
+def delete_navidrome_playlist(playlist_id: str) -> None:
+    raw = nd_ids.unwrap(playlist_id) or playlist_id
+    if not raw:
+        raise NavidromeError("Ungültige Playlist", 400)
+    if not config.configured():
+        raise NavidromeError("Navidrome ist nicht konfiguriert", 400)
+    with NavidromeClient() as client:
+        client.delete_playlist(raw)
+
+
 async def import_tracks(video_ids: list[str]) -> list[dict]:
     tracks = await catalog.get_songs(video_ids)
     by_id = {track["id"]: track for track in tracks}

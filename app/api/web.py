@@ -20,6 +20,7 @@ from app.mediasync.client import MediaSyncError
 from app.navidrome import bridge as navidrome
 from app.navidrome import config as navidrome_config
 from app.navidrome import ids as nd_ids
+from app.navidrome.client import NavidromeError
 from app.subsonic import media
 from app.ytm import ids
 from app.ytm import client as ytm
@@ -802,6 +803,16 @@ async def save_navidrome(request: Request, payload: dict = Body(...)):
 async def navidrome_library(request: Request):
     _require_session(request)
     return await navidrome.library()
+
+
+@router.delete("/navidrome/playlist/{playlist_id}")
+async def delete_navidrome_playlist(request: Request, playlist_id: str):
+    _require_session(request)
+    try:
+        await run_in_threadpool(navidrome.delete_navidrome_playlist, playlist_id)
+    except NavidromeError as exc:
+        raise HTTPException(status_code=getattr(exc, "status_code", 502), detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @router.get("/navidrome/playlist/{playlist_id}")

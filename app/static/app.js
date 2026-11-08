@@ -170,20 +170,68 @@
     });
   }
 
+  function playlistDeletable(playlist) {
+    const source = playlist.source || "local";
+    const routeName = (playlist.route && playlist.route.name) || "playlist";
+    return source === "local" || source === "navidrome" || routeName === "playlist" || routeName === "nplaylist";
+  }
+
+  async function deletePlaylistEntry(playlist) {
+    if (!confirm(`Playlist „${playlist.name}“ löschen?`)) return;
+    const routeName = (playlist.route && playlist.route.name) || (playlist.source === "navidrome" ? "nplaylist" : "playlist");
+    const playlistId = (playlist.route && playlist.route.id) || playlist.id;
+    try {
+      if (playlist.source === "navidrome" || routeName === "nplaylist") {
+        await api(`/api/navidrome/playlist/${encodeURIComponent(playlistId)}`, { method: "DELETE" });
+      } else {
+        await api(`/api/playlist/${playlistId}`, { method: "DELETE" });
+      }
+      toast(`„${playlist.name}“ gelöscht`);
+      state.playlists = (state.playlists || []).filter((item) => String(item.id) !== String(playlist.id));
+      state.sidebarPlaylists = (state.sidebarPlaylists || []).filter((item) => String(item.id) !== String(playlist.id));
+      fillSidebarPlaylists(state.sidebarPlaylists);
+      const current = state.route || {};
+      const viewing =
+        (current.name === "playlist" || current.name === "nplaylist") &&
+        String(current.id) === String(playlistId);
+      if (current.name === "playlists" || viewing) {
+        state.stack = viewing ? [] : state.stack;
+        state.route = { name: "playlists" };
+        render(state.route, true);
+      }
+    } catch (error) {
+      toast(error.message || "Löschen fehlgeschlagen");
+    }
+  }
+
   function fillSidebarPlaylists(playlists) {
     const box = $("sidebar-playlist-list");
     if (!box) return;
     const items = playlists || [];
+    state.sidebarPlaylists = items;
     box.replaceChildren(
       ...items.slice(0, 30).map((playlist) =>
-        element("button", {
-          class: "sidebar-link",
-          text: playlist.name,
-          onclick: () => {
-            state.stack = [];
-            navigate(playlist.route || { name: "playlist", id: playlist.id }, { replace: true });
-          },
-        })
+        element("div", { class: "sidebar-playlist-row" }, [
+          element("button", {
+            class: "sidebar-link",
+            text: playlist.name,
+            onclick: () => {
+              state.stack = [];
+              navigate(playlist.route || { name: "playlist", id: playlist.id }, { replace: true });
+            },
+          }),
+          playlistDeletable(playlist)
+            ? element("button", {
+                class: "sidebar-delete",
+                "aria-label": `„${playlist.name}“ löschen`,
+                html: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9z"/></svg>',
+                onclick: (event) => {
+                  event.stopPropagation();
+                  deletePlaylistEntry(playlist);
+                },
+              })
+            : null,
+        ])
       )
     );
   }

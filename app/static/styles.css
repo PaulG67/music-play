@@ -141,11 +141,19 @@ svg { fill: currentColor; }
     text-align: left;
   }
   .sidebar-label:hover { color: var(--text); }
+  .sidebar-playlist-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    border-radius: 6px;
+  }
+  .sidebar-playlist-row:hover { background: rgba(255, 255, 255, 0.06); }
   .sidebar-link {
     display: block;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     text-align: left;
-    padding: 8px 12px;
+    padding: 8px 8px 8px 12px;
     border-radius: 6px;
     font-size: 13px;
     color: var(--text-dim);
@@ -154,6 +162,26 @@ svg { fill: currentColor; }
     white-space: nowrap;
   }
   .sidebar-link:hover { color: var(--text); }
+  .sidebar-delete {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    color: var(--text-dim);
+    opacity: 0;
+  }
+  .sidebar-delete svg { width: 14px; height: 14px; }
+  .sidebar-playlist-row:hover .sidebar-delete,
+  .sidebar-delete:focus-visible { opacity: 1; }
+  .sidebar-delete:hover {
+    color: #ff8a8a;
+    background: rgba(255, 80, 80, 0.14);
+  }
+  @media (hover: none) {
+    .sidebar-delete { opacity: 0.7; }
+  }
 
   #main {
     grid-column: 2;
