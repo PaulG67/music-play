@@ -1024,6 +1024,8 @@ input[type="range"]::-moz-range-thumb {
   font-size: 14px;
 }
 .field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; font-size: 13px; }
+.field label { font-weight: 600; }
+.field .muted { margin: 0; line-height: 1.45; }
 .select, .textarea {
   width: 100%;
   padding: 10px 12px;

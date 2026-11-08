@@ -1597,17 +1597,24 @@
           placeholder: nd.passwordSet ? "Passwort unverändert lassen" : "Navidrome-Passwort",
           autocomplete: "new-password",
         }),
-        element("input", {
-          type: "text",
-          id: "nd-folder",
-          value: nd.importFolder || "YouTube",
-          placeholder: "Unterordner für Imports",
-        }),
+        element("div", { class: "field" }, [
+          element("label", { for: "nd-folder", text: "Import-Ordner" }),
+          element("input", {
+            type: "text",
+            id: "nd-folder",
+            value: nd.importFolder || "YouTube",
+            placeholder: "YouTube",
+          }),
+          element("p", {
+            class: "muted",
+            text: "Unterordner in deiner Navidrome-Musikbibliothek. Wenn du einen Titel aus YouTube Music nach Navidrome lädst, wird die Datei hier abgelegt – nicht ins Wurzelverzeichnis der ganzen Sammlung. „YouTube“ ist nur der vorgeschlagene Ordnername, du kannst ihn ändern.",
+          }),
+        ]),
         nd.configured
           ? element("p", {
               class: "muted",
               text: nd.musicDirWritable
-                ? `Imports nach ${nd.musicDir}/${nd.importFolder || "YouTube"}`
+                ? `Aktueller Pfad: ${nd.musicDir}/${nd.importFolder || "YouTube"}`
                 : `Musikordner nicht beschreibbar (${nd.musicDir}). In Unraid denselben Pfad wie Navidrome als /music einhängen.`,
             })
           : null,
