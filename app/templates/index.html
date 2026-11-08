@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>Music Play 1.3.7</title>
+  <title>Music Play 1.5.0</title>
 
-  <meta name="theme-color" content="#0d0f14">
+  <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -21,92 +21,195 @@
 <body>
 <script>document.getElementById("login")?.remove();</script>
 
-<header id="topbar">
-  <button class="icon-button" id="back-button" hidden aria-label="Zurück">&#8592;</button>
-  <span id="topbar-title">Start</span>
-  <span id="offline-badge" class="badge" hidden>Offline</span>
-  <button class="icon-button" id="reload-button" aria-label="Aktualisieren">&#8635;</button>
-</header>
-
-<main id="view" aria-live="polite"></main>
-
-<section id="now-playing" class="now-playing" hidden>
-  <div class="np-top">
-    <button class="icon-button" id="collapse-player" aria-label="Schliessen">&#8595;</button>
-    <span id="np-sleep-info" class="badge" hidden></span>
-    <button class="icon-button" id="np-more" aria-label="Mehr">&#8942;</button>
-  </div>
-
-  <img id="np-cover" alt="">
-
-  <div class="np-meta">
-    <h2 id="np-title">–</h2>
-    <p id="np-artist"></p>
-    <p id="np-votes" class="np-votes" hidden></p>
-  </div>
-
-  <div class="np-seek">
-    <input type="range" id="np-progress" min="0" max="1000" value="0" step="1" aria-label="Fortschritt">
-    <div class="np-times"><span id="np-elapsed">0:00</span><span id="np-duration">0:00</span></div>
-  </div>
-
-  <div class="np-controls">
-    <button class="icon-button" id="np-shuffle" aria-label="Zufall">&#8646;</button>
-    <button class="icon-button" id="np-skip-back" aria-label="10 Sekunden zurück">−10</button>
-    <button class="icon-button" id="np-prev" aria-label="Zurück">&#9198;</button>
-    <button class="icon-button primary" id="np-toggle" aria-label="Abspielen">&#9654;</button>
-    <button class="icon-button" id="np-next" aria-label="Weiter">&#9197;</button>
-    <button class="icon-button" id="np-skip-fwd" aria-label="10 Sekunden vor">+10</button>
-    <button class="icon-button" id="np-repeat" aria-label="Wiederholen">&#128257;</button>
-  </div>
-
-  <div class="np-volume">
-    <button class="icon-button" id="np-mute" aria-label="Stumm">&#128266;</button>
-    <input type="range" id="np-volume" min="0" max="100" value="100" step="1" aria-label="Lautstärke">
-    <span id="np-volume-label">100%</span>
-  </div>
-
-  <div class="np-actions">
-    <button id="np-star" class="chip">&#9825; Favorit</button>
-    <button id="np-navidrome" class="chip">&#8595; Download</button>
-    <button id="np-offline" class="chip">&#8595; Offline</button>
-    <button id="np-playlist" class="chip">+ Playlist</button>
-    <button id="np-radio" class="chip">&#9835; Radio</button>
-    <button id="np-lyrics-toggle" class="chip">Songtext</button>
-    <button id="np-rate" class="chip">1×</button>
-    <button id="np-sleep" class="chip">&#9203; Sleep</button>
-    <button id="np-eq" class="chip">Equalizer</button>
-  </div>
-
-  <div id="np-lyrics-panel" class="np-lyrics-panel" hidden>
-    <div class="lyrics-toolbar">
-      <button id="lyrics-translate" class="chip">Übersetzen</button>
-      <span id="lyrics-source" class="muted"></span>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <img src="/static/icons/icon.svg" alt="">
+      <span>Music Play</span>
     </div>
-    <div id="np-lyrics" class="np-lyrics"></div>
+    <nav id="nav">
+      <button data-route="home" class="active">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.1 3.2 3 11.2h2.4v9.1h5.6v-6.3h2v6.3h5.6v-9.1H21l-8.9-8z"/></svg>
+        Start
+      </button>
+      <button data-route="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13m0-2a8.5 8.5 0 1 0 5.4 15.1l4.8 4.8 1.4-1.4-4.8-4.8A8.5 8.5 0 0 0 10.5 2z"/></svg>
+        Suche
+      </button>
+      <button data-route="explore">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2zm3.8 6.2-1.6 7.2-7.2 1.6 1.6-7.2 7.2-1.6z"/></svg>
+        Entdecken
+      </button>
+      <button data-route="library">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h2.2v18H4V3zm4.6 0H11v18H8.6V3zM13 7.1 21 5v14.4l-8 2.1V7.1z"/></svg>
+        Mediathek
+      </button>
+      <button data-route="settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 12.6a7.4 7.4 0 0 0 .1-1.2 7.4 7.4 0 0 0-.1-1.2l2-1.6-1.9-3.3-2.4 1a7.5 7.5 0 0 0-2.1-1.2L13.2 2h-3.8L9 3.1a7.5 7.5 0 0 0-2.1 1.2l-2.4-1-1.9 3.3 2 1.6a7.4 7.4 0 0 0-.1 1.2 7.4 7.4 0 0 0 .1 1.2l-2 1.6 1.9 3.3 2.4-1a7.5 7.5 0 0 0 2.1 1.2l.4 2.6h3.8l.5-2.6a7.5 7.5 0 0 0 2.1-1.2l2.4 1 1.9-3.3-2-1.6zM11.3 15a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>
+        Mehr
+      </button>
+    </nav>
+    <div id="sidebar-playlists" class="sidebar-playlists" hidden>
+      <p class="sidebar-label">Playlists</p>
+      <div id="sidebar-playlist-list"></div>
+    </div>
+  </aside>
+
+  <div id="main">
+    <header id="topbar">
+      <button class="icon-button" id="back-button" hidden aria-label="Zurück">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.4 5.4 8.8 12l6.6 6.6-1.4 1.4L6 12l8-8z"/></svg>
+      </button>
+      <span id="topbar-title">Start</span>
+      <span id="offline-badge" class="badge" hidden>Offline</span>
+      <button class="icon-button" id="reload-button" aria-label="Aktualisieren">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6V2L7 7l5 5V8a4 4 0 1 1-4 4H6a6 6 0 1 0 6-6z"/></svg>
+      </button>
+    </header>
+
+    <main id="view" aria-live="polite"></main>
   </div>
 
-  <div id="np-queue" class="np-queue"></div>
-</section>
+  <aside id="queue-panel" hidden>
+    <div class="queue-head">
+      <strong>Warteschlange</strong>
+      <button class="icon-button" id="queue-close" aria-label="Schliessen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
+      </button>
+    </div>
+    <div id="queue-list" class="np-queue"></div>
+  </aside>
 
-<div id="mini-player" class="mini-player" hidden>
-  <img id="mini-cover" alt="">
-  <div class="mini-meta">
-    <strong id="mini-title">–</strong>
-    <span id="mini-artist"></span>
+  <section id="now-playing" class="now-playing" hidden>
+    <div class="np-top">
+      <button class="icon-button" id="collapse-player" aria-label="Schliessen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.7 9.4 12 14.7l5.3-5.3 1.4 1.4L12 17.5 5.3 10.8z"/></svg>
+      </button>
+      <span id="np-sleep-info" class="badge" hidden></span>
+      <button class="icon-button" id="np-more" aria-label="Mehr">&#8942;</button>
+    </div>
+
+    <div class="np-stage">
+      <img id="np-cover" alt="">
+
+      <div class="np-meta">
+        <h2 id="np-title">–</h2>
+        <p id="np-artist"></p>
+        <p id="np-votes" class="np-votes" hidden></p>
+      </div>
+
+      <div class="np-seek">
+        <input type="range" id="np-progress" min="0" max="1000" value="0" step="1" aria-label="Fortschritt">
+        <div class="np-times"><span id="np-elapsed">0:00</span><span id="np-duration">0:00</span></div>
+      </div>
+
+      <div class="np-controls">
+        <button class="icon-button" id="np-shuffle" aria-label="Zufall">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3h4v4h-2V6.4l-3.8 3.8-1.4-1.4L17.6 5H17V3zM3 7h6.2l7 7H21v2h-5.8l-7-7H3V7zm14 8.6 3 3V17h2v4h-4v-2h1.6l-3-3 1.4-1.4zM3 15h5.2l2.2-2.2 1.4 1.4L9 17H3v-2z"/></svg>
+        </button>
+        <button class="icon-button" id="np-skip-back" aria-label="10 Sekunden zurück">−10</button>
+        <button class="icon-button" id="np-prev" aria-label="Zurück">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h2.2v12H6V6zm3.6 6 10.4 7V5L9.6 12z"/></svg>
+        </button>
+        <button class="icon-button primary" id="np-toggle" aria-label="Abspielen">
+          <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.2v13.6L19.2 12 8 5.2z"/></svg>
+          <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5h4v14h-4V5zm7 0h4v14h-4V5z"/></svg>
+        </button>
+        <button class="icon-button" id="np-next" aria-label="Weiter">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.8 6H18v12h-2.2V6zM4 19V5l10.4 7L4 19z"/></svg>
+        </button>
+        <button class="icon-button" id="np-skip-fwd" aria-label="10 Sekunden vor">+10</button>
+        <button class="icon-button" id="np-repeat" aria-label="Wiederholen">
+          <svg class="icon-repeat" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
+          <span class="repeat-one">1</span>
+        </button>
+      </div>
+
+      <div class="np-volume">
+        <button class="icon-button" id="np-mute" aria-label="Stumm">
+          <svg class="icon-vol" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm12.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
+          <svg class="icon-muted" viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 12 20 15.5 18.6 17 15 13.4 11.4 17 10 15.5 13.5 12 10 8.5 11.4 7 15 10.6 18.6 7 20 8.5 16.5 12zM4 9v6h4l5 4V5L8 9H4z"/></svg>
+        </button>
+        <input type="range" id="np-volume" min="0" max="100" value="100" step="1" aria-label="Lautstärke">
+        <span id="np-volume-label">100%</span>
+      </div>
+    </div>
+
+    <div class="np-actions">
+      <button id="np-star" class="chip">Favorit</button>
+      <button id="np-navidrome" class="chip">Download</button>
+      <button id="np-offline" class="chip">Offline</button>
+      <button id="np-playlist" class="chip">+ Playlist</button>
+      <button id="np-radio" class="chip">Radio</button>
+      <button id="np-lyrics-toggle" class="chip">Songtext</button>
+      <button id="np-rate" class="chip">1×</button>
+      <button id="np-sleep" class="chip">Sleep</button>
+      <button id="np-eq" class="chip">Equalizer</button>
+    </div>
+
+    <div id="np-lyrics-panel" class="np-lyrics-panel" hidden>
+      <div class="lyrics-toolbar">
+        <button id="lyrics-translate" class="chip">Übersetzen</button>
+        <span id="lyrics-source" class="muted"></span>
+      </div>
+      <div id="np-lyrics" class="np-lyrics"></div>
+    </div>
+
+    <div id="np-queue" class="np-queue"></div>
+  </section>
+
+  <div id="mini-player" class="mini-player" hidden>
+    <div class="mini-line" aria-hidden="true"><i id="mini-line-fill"></i></div>
+    <div class="bar-left">
+      <img id="mini-cover" alt="">
+      <div class="mini-meta">
+        <strong id="mini-title">–</strong>
+        <span id="mini-artist"></span>
+      </div>
+    </div>
+    <div class="bar-center">
+      <div class="bar-controls">
+        <button class="icon-button" id="mini-shuffle" aria-label="Zufall">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 3h4v4h-2V6.4l-3.8 3.8-1.4-1.4L17.6 5H17V3zM3 7h6.2l7 7H21v2h-5.8l-7-7H3V7zm14 8.6 3 3V17h2v4h-4v-2h1.6l-3-3 1.4-1.4zM3 15h5.2l2.2-2.2 1.4 1.4L9 17H3v-2z"/></svg>
+        </button>
+        <button class="icon-button" id="mini-prev" aria-label="Zurück">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h2.2v12H6V6zm3.6 6 10.4 7V5L9.6 12z"/></svg>
+        </button>
+        <button class="icon-button primary" id="mini-toggle" aria-label="Abspielen">
+          <svg class="icon-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.2v13.6L19.2 12 8 5.2z"/></svg>
+          <svg class="icon-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 5h4v14h-4V5zm7 0h4v14h-4V5z"/></svg>
+        </button>
+        <button class="icon-button" id="mini-next" aria-label="Weiter">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.8 6H18v12h-2.2V6zM4 19V5l10.4 7L4 19z"/></svg>
+        </button>
+        <button class="icon-button" id="mini-repeat" aria-label="Wiederholen">
+          <svg class="icon-repeat" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
+          <span class="repeat-one">1</span>
+        </button>
+      </div>
+      <div class="bar-seek">
+        <span id="mini-elapsed">0:00</span>
+        <input type="range" id="mini-progress" min="0" max="1000" value="0" step="1" aria-label="Fortschritt">
+        <span id="mini-duration">0:00</span>
+      </div>
+    </div>
+    <div class="bar-right">
+      <button class="icon-button" id="mini-lyrics" aria-label="Songtext">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h10v2H5V4zm0 4h14v2H5V8zm0 4h8v2H5v-2zm0 4h12v2H5v-2zm0 4h9v2H5v-2z"/></svg>
+      </button>
+      <button class="icon-button" id="mini-queue" aria-label="Warteschlange">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h10v2H4v-2zm12.2 3 4.8-3-4.8-3v6z"/></svg>
+      </button>
+      <div class="mini-volume">
+        <button class="icon-button" id="mini-mute" aria-label="Stumm">
+          <svg class="icon-vol" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4zm12.5 3a4.5 4.5 0 0 0-2.5-4v8a4.5 4.5 0 0 0 2.5-4z"/></svg>
+          <svg class="icon-muted" viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 12 20 15.5 18.6 17 15 13.4 11.4 17 10 15.5 13.5 12 10 8.5 11.4 7 15 10.6 18.6 7 20 8.5 16.5 12zM4 9v6h4l5 4V5L8 9H4z"/></svg>
+        </button>
+        <input type="range" id="mini-volume" min="0" max="100" value="100" step="1" aria-label="Lautstärke">
+      </div>
+    </div>
   </div>
-  <button class="icon-button" id="mini-prev" aria-label="Zurück">&#9198;</button>
-  <button class="icon-button" id="mini-toggle" aria-label="Abspielen">&#9654;</button>
-  <button class="icon-button" id="mini-next" aria-label="Weiter">&#9197;</button>
 </div>
-
-<nav id="nav">
-  <button data-route="home" class="active"><span>&#9835;</span>Start</button>
-  <button data-route="search"><span>&#9906;</span>Suche</button>
-  <button data-route="explore"><span>&#9673;</span>Entdecken</button>
-  <button data-route="library"><span>&#9829;</span>Bibliothek</button>
-  <button data-route="settings"><span>&#9881;</span>Mehr</button>
-</nav>
 
 <div id="toast" class="toast" hidden></div>
 <div id="sheet" class="sheet" hidden><div class="sheet-body" id="sheet-body"></div></div>
