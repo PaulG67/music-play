@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>Music Play 1.6.4</title>
+  <title>Music Play 1.7.0</title>
 
   <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -11,17 +11,26 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Music Play">
   <meta name="referrer" content="no-referrer">
-  <style>#login,.login{display:none!important}</style>
-
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css?v={{ version }}">
 </head>
 <body>
-<script>document.getElementById("login")?.remove();</script>
+<section id="login" class="login"{% if authenticated %} hidden{% endif %}>
+  <form class="login-card" id="login-form">
+    <img src="/static/icons/icon.svg" alt="">
+    <h1>Music Play</h1>
+    <p id="login-lead">Melde dich an, um fortzufahren.</p>
+    <input id="login-user" type="text" name="username" autocomplete="username" placeholder="Benutzername">
+    <input id="login-pass" type="password" name="password" autocomplete="current-password" placeholder="Passwort">
+    <input id="login-pass2" type="password" name="passwordConfirm" autocomplete="new-password" placeholder="Passwort wiederholen" hidden>
+    <p id="login-error" class="login-error" hidden></p>
+    <button type="submit" id="login-submit">Anmelden</button>
+  </form>
+</section>
 
-<div id="app">
+<div id="app"{% if not authenticated %} hidden{% endif %}>
   <aside id="sidebar">
     <div class="brand">
       <img src="/static/icons/icon.svg" alt="">

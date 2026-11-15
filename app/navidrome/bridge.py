@@ -279,6 +279,20 @@ def sync_playlist(playlist_id: int) -> str | None:
     return created
 
 
+def add_songs_to_playlist(playlist_id: str, song_ids: list[str]) -> None:
+    if not config.configured():
+        raise NavidromeError("Navidrome ist nicht konfiguriert", 400)
+    with NavidromeClient() as client:
+        client.add_songs_to_playlist(playlist_id, song_ids)
+
+
+def create_named_playlist(name: str, song_ids: list[str]) -> str | None:
+    if not config.configured():
+        raise NavidromeError("Navidrome ist nicht konfiguriert", 400)
+    with NavidromeClient() as client:
+        return client.create_playlist(name, song_ids)
+
+
 def delete_remote_playlist(navidrome_id: str | None) -> None:
     if not navidrome_id or not config.configured():
         return

@@ -1086,14 +1086,20 @@ input[type="range"]::-moz-range-thumb {
 
 /* ------------------------------------------------------------------ login */
 
-#login, .login {
-  display: none !important;
-  visibility: hidden !important;
-  pointer-events: none !important;
-  height: 0 !important;
-  overflow: hidden !important;
+.login {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #000;
 }
-.login-card { max-width: 340px; text-align: center; }
+.login[hidden] { display: none !important; }
+.login-card {
+  width: min(360px, 100%);
+  text-align: center;
+}
 .login-card img { margin: 0 auto 16px; }
 .login-card h1 { margin: 0 0 6px; font-size: 24px; }
 .login-card p { color: var(--text-dim); font-size: 14px; margin: 0 0 18px; }

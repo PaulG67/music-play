@@ -31,9 +31,11 @@ router = APIRouter(prefix="/api")
 
 def _require_session(request: Request) -> str:
     username = getattr(request.state, "session_user", None)
-    if not username:
-        raise HTTPException(status_code=401, detail="Nicht angemeldet")
-    return username
+    if username:
+        return username
+    if not auth_store.password_required():
+        raise HTTPException(status_code=401, detail="Zugang einrichten")
+    raise HTTPException(status_code=401, detail="Nicht angemeldet")
 
 
 def _subsonic_id(item: dict, kind: str) -> str:
@@ -137,8 +139,9 @@ def _set_session_cookie(response: Response, token: str, request: Request) -> Non
 def _session_payload(user: str | None) -> dict:
     required = auth_store.password_required()
     return {
-        "authenticated": bool(user) or not required,
+        "authenticated": bool(user),
         "passwordRequired": required,
+        "needsSetup": not required,
         "user": user or (auth_store.username() if not required else None),
         "version": APP_VERSION,
         "ytmAccount": ytm.is_authenticated(),
@@ -154,21 +157,25 @@ async def login(request: Request):
         payload = await request.json()
     else:
         form = await request.form()
-        payload = {"password": form.get("password")}
+        payload = {"username": form.get("username"), "password": form.get("password")}
 
+    username = web_session.clean_secret(str(payload.get("username") or "")) or auth_store.username()
     password = payload.get("password") or ""
     entered = web_session.clean_secret(password)
     expected = auth_store.password()
-    if auth_store.password_required() and not web_session.check_password(password):
+    if not auth_store.password_required():
+        detail = "Zuerst unter Zugang ein Passwort setzen."
+        if wants_json:
+            raise HTTPException(status_code=401, detail=detail)
+        return RedirectResponse("/?login=fail", status_code=303)
+    if not web_session.secrets_equal(username, auth_store.username()) or not web_session.check_password(password):
         logger.warning(
-            "Login fehlgeschlagen: Eingabe {} Zeichen, konfiguriert {} Zeichen",
+            "Login fehlgeschlagen: Benutzer {}, Eingabe {} Zeichen, konfiguriert {} Zeichen",
+            username,
             len(entered),
             len(expected),
         )
-        detail = (
-            f"Passwort falsch. Eingegeben: {len(entered)} Zeichen, "
-            f"gesetzt: {len(expected)} Zeichen."
-        )
+        detail = "Benutzername oder Passwort falsch."
         if wants_json:
             raise HTTPException(status_code=401, detail=detail)
         return RedirectResponse("/?login=fail", status_code=303)
@@ -209,6 +216,8 @@ async def save_account(request: Request, response: Response, payload: dict = Bod
         raise HTTPException(status_code=400, detail="Passwort fehlt")
     new_password = web_session.clean_secret(str(payload.get("password")))
     confirm = web_session.clean_secret(str(payload.get("passwordConfirm") or new_password))
+    if not new_password:
+        raise HTTPException(status_code=400, detail="Passwort darf nicht leer sein")
     if new_password != confirm:
         raise HTTPException(status_code=400, detail="Passwörter stimmen nicht überein")
 
@@ -828,6 +837,31 @@ async def navidrome_playlist(request: Request, playlist_id: str):
 async def navidrome_cover(request: Request, cover_id: str, size: int = 544):
     _require_session(request)
     return await media.fetch_navidrome_cover(cover_id, size)
+
+
+@router.post("/navidrome/playlists")
+async def create_navidrome_playlist(request: Request, payload: dict = Body(...)):
+    _require_session(request)
+    name = (payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name fehlt")
+    song_ids = [str(item) for item in (payload.get("songIds") or []) if item]
+    try:
+        created = await run_in_threadpool(navidrome.create_named_playlist, name, song_ids)
+    except NavidromeError as exc:
+        raise HTTPException(status_code=getattr(exc, "status_code", 502), detail=str(exc)) from exc
+    return {"ok": True, "id": created, "name": name}
+
+
+@router.post("/navidrome/playlist/{playlist_id}/tracks")
+async def add_navidrome_playlist_tracks(request: Request, playlist_id: str, payload: dict = Body(...)):
+    _require_session(request)
+    song_ids = [str(item) for item in (payload.get("songIds") or []) if item]
+    try:
+        await run_in_threadpool(navidrome.add_songs_to_playlist, playlist_id, song_ids)
+    except NavidromeError as exc:
+        raise HTTPException(status_code=getattr(exc, "status_code", 502), detail=str(exc)) from exc
+    return {"ok": True}
 
 
 @router.post("/navidrome/import")

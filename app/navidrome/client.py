@@ -371,6 +371,13 @@ class NavidromeClient:
         playlist["song_count"] = len(playlist["tracks"])
         return playlist
 
+    def add_songs_to_playlist(self, playlist_id: str, song_ids: list[str]) -> None:
+        raw_id = nd_ids.unwrap(playlist_id) or playlist_id
+        ids = [nd_ids.unwrap(item) or item for item in song_ids if item]
+        if not raw_id or not ids:
+            return
+        self._rest("updatePlaylist", {"playlistId": raw_id, "songIdToAdd": ids})
+
     def create_playlist(self, name: str, song_ids: list[str], playlist_id: str | None = None) -> str | None:
         params = self._auth_params()
         if playlist_id:
@@ -378,7 +385,9 @@ class NavidromeClient:
         params["name"] = name
         pairs = list(params.items())
         for song_id in song_ids:
-            pairs.append(("songId", song_id))
+            raw_song = nd_ids.unwrap(song_id) or song_id
+            if raw_song:
+                pairs.append(("songId", raw_song))
         try:
             response = self._http.post(f"{self.base}/rest/createPlaylist.view", data=pairs)
             response.raise_for_status()

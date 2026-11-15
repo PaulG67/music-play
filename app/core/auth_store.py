@@ -20,7 +20,7 @@ _cache: dict | None = None
 def _defaults() -> dict:
     return {
         "username": settings.subsonic_user or "musicplay",
-        "password": "",
+        "password": clean_secret(settings.subsonic_password),
     }
 
 

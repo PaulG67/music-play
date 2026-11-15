@@ -47,6 +47,9 @@
       localStorage.removeItem(TOKEN_KEY);
       const payload = await response.json().catch(() => ({}));
       const message = typeof payload.detail === "string" ? payload.detail : "Nicht angemeldet";
+      if (!path.startsWith("/api/login") && path !== "/api/session" && path !== "/api/login-hint" && path !== "/api/account") {
+        showAuthScreen(message === "Zugang einrichten" ? "setup" : "login", message);
+      }
       throw new Error(message);
     }
     if (!response.ok) {
@@ -1746,9 +1749,7 @@
         element("h2", { text: "Zugang" }),
         element("p", {
           class: "muted",
-          text: status.passwordRequired
-            ? "Passwort ist gesetzt. Web und Amperfy verwenden dieselben Daten."
-            : "Kein Passwort – die App ist im lokalen Netz offen. Du kannst hier eines setzen.",
+          text: "Anmeldung in der App. Dieselben Daten gelten für Amperfy. Die Authentisierung am Proxy kannst du danach abschalten.",
         }),
         element("div", { class: "settings-form" }, [
           element("input", {
@@ -1779,7 +1780,7 @@
                 const password = $("acct-pass").value;
                 const passwordConfirm = $("acct-pass2").value;
                 if (!password) {
-                  toast("Passwort eingeben oder «Passwort entfernen» nutzen");
+                  toast("Passwort eingeben");
                   return;
                 }
                 try {
@@ -1795,29 +1796,6 @@
                 }
               },
             }),
-            status.passwordRequired
-              ? element("button", {
-                  class: "chip",
-                  text: "Passwort entfernen",
-                  onclick: async () => {
-                    try {
-                      const data = await api("/api/account", {
-                        method: "POST",
-                        body: {
-                          username: $("acct-user").value.trim(),
-                          password: "",
-                          passwordConfirm: "",
-                        },
-                      });
-                      if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
-                      toast("Passwort entfernt – Zugang wieder offen");
-                      render(state.route, true);
-                    } catch (error) {
-                      toast(error.message);
-                    }
-                  },
-                })
-              : null,
           ]),
         ]),
       ]),
@@ -1899,17 +1877,15 @@
             render(state.route, true);
           },
         }),
-        status.passwordRequired
-          ? element("button", {
-              class: "chip",
-              text: "Abmelden",
-              onclick: async () => {
-                await api("/api/logout", { method: "POST" });
-                localStorage.removeItem(TOKEN_KEY);
-                location.reload();
-              },
-            })
-          : null,
+        element("button", {
+          class: "chip",
+          text: "Abmelden",
+          onclick: async () => {
+            await api("/api/logout", { method: "POST" });
+            localStorage.removeItem(TOKEN_KEY);
+            location.reload();
+          },
+        }),
       ])
     );
   }
@@ -1929,48 +1905,67 @@
       const failed = updates.find((job) => job.status === "error");
       if (failed) throw new Error(failed.error || "Import fehlgeschlagen");
     }
-    return jobs;
+    return Promise.all((jobs || []).map((job) => api(`/api/navidrome/job/${job.id}`).catch(() => job)));
   }
 
   async function importToNavidrome(tracks, button) {
-    const pending = tracks.filter((track) => track.id && !isLocalTrack(track) && !String(track.id).startsWith("nd:"));
-    if (!pending.length) {
-      toast("Bereits in Navidrome");
-      return;
+    const list = asTrackList(tracks);
+    const pending = list.filter((track) => track.id && !isLocalTrack(track) && !String(track.id).startsWith("nd:"));
+    let jobs = [];
+    if (pending.length) {
+      if (button) button.disabled = true;
+      const result = await api("/api/navidrome/import", {
+        method: "POST",
+        body: { videoIds: pending.map((track) => track.id) },
+      });
+      jobs = await waitForJobs(result.jobs, button);
+      pending.forEach((track) => {
+        track.inLibrary = true;
+        track.source = "both";
+      });
     }
-    if (button) button.disabled = true;
-    const result = await api("/api/navidrome/import", {
-      method: "POST",
-      body: { videoIds: pending.map((track) => track.id) },
-    });
-    await waitForJobs(result.jobs, button);
-    pending.forEach((track) => {
-      track.inLibrary = true;
-      track.source = "both";
-    });
     if (button) {
       button.disabled = false;
       button.textContent = mediasyncReady() ? "↓ Download" : navidromeReady() ? "↓ Nach Navidrome" : "↓ Alle offline";
     }
-    toast(pending.length === 1 ? "In Navidrome gespeichert" : `${pending.length} Titel in Navidrome`);
+    if (pending.length) {
+      toast(pending.length === 1 ? "In Navidrome gespeichert" : `${pending.length} Titel in Navidrome`);
+    } else {
+      toast("Bereits in Navidrome");
+    }
     refreshOfflineBadges();
+    return jobs || [];
+  }
+
+  function navidromeSongIds(tracks, jobs) {
+    const fromJobs = (jobs || []).map((job) => job.navidromeId).filter(Boolean);
+    const fromTracks = asTrackList(tracks)
+      .map((track) => track.navidromeId || (String(track.id || "").startsWith("nd:") ? String(track.id).slice(3) : ""))
+      .filter(Boolean);
+    return [...new Set([...fromJobs, ...fromTracks])];
+  }
+
+  async function sendToNavidrome(tracks, playlistId, playlistName) {
+    const jobs = await importToNavidrome(tracks);
+    const songIds = navidromeSongIds(tracks, jobs);
+    if (playlistName && !playlistId) {
+      await api("/api/navidrome/playlists", { method: "POST", body: { name: playlistName, songIds } });
+      toast(`In Navidrome-Playlist „${playlistName}“`);
+      return;
+    }
+    if (playlistId && playlistId !== "library") {
+      await api(`/api/navidrome/playlist/${encodeURIComponent(playlistId)}/tracks`, {
+        method: "POST",
+        body: { songIds },
+      });
+      toast("Zur Navidrome-Playlist hinzugefügt");
+    }
   }
 
   async function downloadAll(tracks, button) {
-    if (mediasyncReady()) {
+    await ensureLibraryTargets();
+    if (mediasyncReady() || navidromeReady()) {
       openDownloadSheet(tracks);
-      return;
-    }
-    if (navidromeReady()) {
-      try {
-        await importToNavidrome(tracks, button);
-      } catch (error) {
-        if (button) {
-          button.disabled = false;
-          button.textContent = "↓ Nach Navidrome";
-        }
-        toast(error.message);
-      }
       return;
     }
     const pending = tracks.filter((track) => !Offline.has(track.id));
@@ -2029,7 +2024,7 @@
       }),
     ];
 
-    if (mediasyncReady()) {
+    if (mediasyncReady() || navidromeReady()) {
       actions.push(
         element("button", {
           class: "action",
@@ -2037,27 +2032,6 @@
           onclick: () => {
             closeSheet();
             openDownloadSheet(track);
-          },
-        })
-      );
-    } else if (navidromeReady() && !String(track.id || "").startsWith("nd:")) {
-      actions.push(
-        element("button", {
-          class: "action",
-          text: local ? "Bereits in Navidrome" : "Nach Navidrome laden",
-          onclick: async (event) => {
-            if (local) {
-              closeSheet();
-              return;
-            }
-            const button = event.currentTarget;
-            button.textContent = "Wird geladen …";
-            try {
-              await importToNavidrome([track], button);
-              closeSheet();
-            } catch (error) {
-              toast(error.message);
-            }
           },
         })
       );
@@ -2621,24 +2595,81 @@
     });
   }
 
+  function downloadTargetButton(target, last, tracks) {
+    const selected = last.playlistId === target.id && last.source === target.source;
+    const label = target.source === "navidrome" ? `Navidrome · ${target.name}` : target.name;
+    return element("button", {
+      class: `action${selected ? " active" : ""}`,
+      text: selected ? `✓ ${label}` : label,
+      onclick: async () => {
+        try {
+          if (target.source === "navidrome") {
+            await sendToNavidrome(tracks, target.id, "");
+          } else {
+            await sendToMediaSync(tracks, target.id);
+          }
+          try {
+            localStorage.setItem(
+              MEDIASYNC_TARGET_KEY,
+              JSON.stringify({ playlistId: target.id || "", playlistName: target.name || "", source: target.source })
+            );
+          } catch (error) {
+            /* ignore */
+          }
+          closeSheet();
+        } catch (error) {
+          toast(error.message);
+        }
+      },
+    });
+  }
+
+  async function ensureLibraryTargets() {
+    if (!state.navidrome) {
+      state.navidrome = await api("/api/navidrome").catch(() => state.navidrome);
+    }
+    if (!state.mediasync) {
+      state.mediasync = await api("/api/mediasync").catch(() => state.mediasync);
+    }
+  }
+
   async function openDownloadSheet(tracks) {
     const list = asTrackList(tracks);
     if (!list.length) return;
-    if (!mediasyncReady()) {
-      toast("MediaSync unter Mehr verbinden");
+    await ensureLibraryTargets();
+    if (!mediasyncReady() && !navidromeReady()) {
+      toast("Navidrome oder MediaSync unter Mehr verbinden");
       $("now-playing").hidden = true;
       navigate({ name: "settings" });
       return;
     }
     const heading = list.length === 1 ? "Download – Playlist wählen" : `Download – ${list.length} Titel`;
     openSheet(heading, [element("p", { class: "muted", text: "Lade Playlists …" })]);
-    let targets = [];
+
+    let mediaTargets = [];
+    let navidromeLists = [];
     try {
-      targets = await loadMediaSyncTargets(true);
+      if (mediasyncReady()) mediaTargets = await loadMediaSyncTargets(true);
     } catch (error) {
-      openSheet(heading, [element("p", { class: "muted", text: error.message })]);
-      return;
+      toast(error.message);
     }
+    try {
+      if (navidromeReady()) {
+        const library = await api("/api/navidrome/library");
+        if (library.error) toast(library.error);
+        navidromeLists = (library.playlists || [])
+          .map((playlist) => ({
+            id: String(playlist.navidromeId || playlist.id || "").replace(/^nd:/, ""),
+            name: playlist.name,
+            source: "navidrome",
+            kind: "playlist",
+          }))
+          .filter((playlist) => playlist.id && playlist.name);
+      }
+    } catch (error) {
+      toast(error.message);
+    }
+
     let last = {};
     try {
       last = JSON.parse(localStorage.getItem(MEDIASYNC_TARGET_KEY) || "{}");
@@ -2646,34 +2677,34 @@
       last = {};
     }
 
-    const playlists = targets
+    const mediaPlaylists = mediaTargets
       .filter((target) => target.kind !== "library" && target.id)
-      .sort((a, b) => {
-        if (a.id === last.playlistId) return -1;
-        if (b.id === last.playlistId) return 1;
-        return String(a.name || "").localeCompare(String(b.name || ""), "de");
-      });
-    const library = targets.find((target) => target.kind === "library") || {
-      id: "library",
-      name: "Nur Bibliothek (ohne Playlist)",
-      kind: "library",
-    };
+      .map((target) => ({ ...target, source: "mediasync" }));
+    const playlists = [...navidromeLists, ...mediaPlaylists].sort((a, b) => {
+      if (a.id === last.playlistId && a.source === (last.source || a.source)) return -1;
+      if (b.id === last.playlistId && b.source === (last.source || b.source)) return 1;
+      return String(a.name || "").localeCompare(String(b.name || ""), "de");
+    });
 
     const summary =
       list.length === 1
-        ? `${list[0].artist} – ${list[0].title}. MediaSync lädt den Titel und legt ihn in der Bibliothek ab.`
-        : `${list.length} Titel. MediaSync lädt und legt sie in der Bibliothek ab.`;
+        ? `${list[0].artist} – ${list[0].title}. Der Titel wird in die Bibliothek geladen und optional einer Playlist zugeordnet.`
+        : `${list.length} Titel werden geladen und optional einer Playlist zugeordnet.`;
 
     const listBox = element("div", {});
     const paint = (query) => {
       const needle = (query || "").trim().toLowerCase();
       const shown = playlists.filter((item) => !needle || String(item.name || "").toLowerCase().includes(needle));
-      const children = shown.map((item) => playlistButton(item, last, list));
+      const children = shown.map((item) => downloadTargetButton(item, last, list));
       if (!shown.length) {
         children.push(
           element("p", {
             class: "muted",
-            text: needle ? "Keine Playlist zu diesem Namen." : "Noch keine Playlists in MediaSync.",
+            text: needle
+              ? "Keine Playlist zu diesem Namen."
+              : navidromeReady()
+                ? "Keine Navidrome-Playlists gefunden. Unter Playlists prüfen, ob die Verbindung steht."
+                : "Noch keine Playlists vorhanden.",
           })
         );
       }
@@ -2681,34 +2712,48 @@
     };
     paint("");
 
+    const preferNavidrome = navidromeReady();
     const nodes = [
       element("p", { class: "muted", text: summary }),
       playlists.length > 6
         ? element("input", {
             type: "search",
-            placeholder: "Bestehende Playlist suchen",
+            placeholder: "Playlist suchen",
             autocomplete: "off",
             oninput: (event) => paint(event.target.value),
           })
         : null,
-      playlists.length ? element("p", { class: "sheet-title", text: "Bestehende Playlists" }) : null,
+      playlists.length ? element("p", { class: "sheet-title", text: preferNavidrome ? "Navidrome- und andere Playlists" : "Bestehende Playlists" }) : null,
       listBox,
       element("p", { class: "sheet-title", text: "Weitere Ziele" }),
       element("button", {
         class: "action",
-        text: "+ Neue Playlist",
+        text: preferNavidrome ? "+ Neue Navidrome-Playlist" : "+ Neue Playlist",
         onclick: async () => {
-          const name = prompt("Name der Playlist in MediaSync");
+          const name = prompt(preferNavidrome ? "Name der Playlist in Navidrome" : "Name der Playlist in MediaSync");
           if (!name) return;
           try {
-            await sendToMediaSync(list, "", name);
+            if (preferNavidrome) await sendToNavidrome(list, "", name);
+            else await sendToMediaSync(list, "", name);
             closeSheet();
           } catch (error) {
             toast(error.message);
           }
         },
       }),
-      playlistButton({ ...library, name: library.name || "Nur Bibliothek (ohne Playlist)" }, last, list),
+      element("button", {
+        class: "action",
+        text: preferNavidrome ? "Nur Navidrome-Bibliothek (ohne Playlist)" : "Nur Bibliothek (ohne Playlist)",
+        onclick: async () => {
+          try {
+            if (preferNavidrome) await sendToNavidrome(list, "library", "");
+            else await sendToMediaSync(list, "library");
+            closeSheet();
+          } catch (error) {
+            toast(error.message);
+          }
+        },
+      }),
     ];
     openSheet(heading, nodes.filter(Boolean));
   }
@@ -2885,27 +2930,13 @@
   $("np-navidrome").addEventListener("click", () => {
     const track = Player.current();
     if (!track) return;
-    if (mediasyncReady()) {
+    if (mediasyncReady() || navidromeReady()) {
       openDownloadSheet(track);
       return;
     }
-    if (!navidromeReady()) {
-      toast("MediaSync unter Mehr verbinden");
-      navigate({ name: "settings" });
-      $("now-playing").hidden = true;
-      return;
-    }
-    if (isLocalTrack(track)) {
-      toast("Bereits in der Navidrome-Bibliothek");
-      return;
-    }
-    $("np-navidrome").textContent = "…";
-    importToNavidrome([track])
-      .then(() => setLibraryButtons(track))
-      .catch((error) => {
-        toast(error.message);
-        setLibraryButtons(track);
-      });
+    toast("Navidrome oder MediaSync unter Mehr verbinden");
+    navigate({ name: "settings" });
+    $("now-playing").hidden = true;
   });
 
   $("np-offline").addEventListener("click", async () => {
@@ -3036,11 +3067,61 @@
     toast("Offline – gespeicherte Titel bleiben abspielbar");
   });
 
+  function showAuthScreen(mode, message) {
+    const setup = mode === "setup";
+    const overlay = $("login");
+    if (!overlay) return;
+    overlay.hidden = false;
+    $("app").hidden = true;
+    $("login-lead").textContent = setup
+      ? "Lege Benutzername und Passwort fest. Danach kannst du die Anmeldung am Proxy abschalten."
+      : "Melde dich an, um Music Play zu nutzen.";
+    $("login-pass2").hidden = !setup;
+    $("login-pass").autocomplete = setup ? "new-password" : "current-password";
+    $("login-submit").textContent = setup ? "Zugang speichern" : "Anmelden";
+    if (message) {
+      $("login-error").hidden = false;
+      $("login-error").textContent = message;
+    } else {
+      $("login-error").hidden = true;
+    }
+  }
+
+  $("login-form")?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const setup = !$("login-pass2").hidden;
+    $("login-error").hidden = true;
+    try {
+      const payload = {
+        username: $("login-user").value.trim(),
+        password: $("login-pass").value,
+      };
+      const data = setup
+        ? await api("/api/account", {
+            method: "POST",
+            body: { ...payload, passwordConfirm: $("login-pass2").value },
+          })
+        : await api("/api/login", { method: "POST", body: payload });
+      if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+      location.reload();
+    } catch (error) {
+      $("login-error").hidden = false;
+      $("login-error").textContent = error.message;
+    }
+  });
+
   async function boot() {
-    document.getElementById("login")?.remove();
-    const session = await api("/api/session").catch(() => ({ user: null, passwordRequired: false }));
+    const session = await api("/api/session").catch(() => ({ authenticated: false, user: null, passwordRequired: false }));
     state.passwordRequired = !!session.passwordRequired;
     state.user = session.user;
+    if (!session.authenticated) {
+      const hint = await api("/api/login-hint").catch(() => ({ username: "musicplay" }));
+      if ($("login-user") && !$("login-user").value) $("login-user").value = hint.username || "";
+      showAuthScreen(session.passwordRequired ? "login" : "setup");
+      return;
+    }
+    $("login").hidden = true;
+    $("app").hidden = false;
     $("offline-badge").hidden = navigator.onLine;
 
     try {
@@ -3052,21 +3133,23 @@
       /* defaults are fine */
     }
 
-    api("/api/playlists")
-      .then((data) => {
-        state.playlists = data.playlists || [];
-        fillSidebarPlaylists((data.playlists || []).map(localPlaylistEntry));
-      })
-      .catch(() => {});
-    api("/api/navidrome")
-      .then((data) => (state.navidrome = data))
-      .catch(() => {});
-    api("/api/mediasync")
-      .then((data) => {
-        state.mediasync = data;
-        if (data && data.configured) loadMediaSyncTargets().catch(() => {});
-      })
-      .catch(() => {});
+    await Promise.all([
+      api("/api/playlists")
+        .then((data) => {
+          state.playlists = data.playlists || [];
+          fillSidebarPlaylists((data.playlists || []).map(localPlaylistEntry));
+        })
+        .catch(() => {}),
+      api("/api/navidrome")
+        .then((data) => (state.navidrome = data))
+        .catch(() => {}),
+      api("/api/mediasync")
+        .then((data) => {
+          state.mediasync = data;
+          if (data && data.configured) loadMediaSyncTargets().catch(() => {});
+        })
+        .catch(() => {}),
+    ]);
 
     state.route = { name: "home" };
     render(state.route);
@@ -3080,9 +3163,7 @@
       .catch(() => {});
   }
 
-  boot().catch(() => {
-    document.getElementById("login")?.remove();
-    state.route = { name: "home" };
-    render(state.route);
+  boot().catch((error) => {
+    showAuthScreen("login", error && error.message);
   });
 })();
