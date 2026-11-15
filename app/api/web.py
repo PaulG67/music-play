@@ -553,23 +553,43 @@ async def moods(request: Request):
     return {"sections": await catalog.mood_categories()}
 
 
+@router.get("/explore")
+async def explore_feed(request: Request):
+    """YouTube Music Entdecken: Alben, Trends und Videos mit Cover."""
+    _require_session(request)
+    try:
+        sections = await catalog.explore()
+        return {
+            "sections": [
+                {**section, "items": _decorate(section.get("items") or [])}
+                for section in sections
+            ]
+        }
+    except Exception:
+        logger.exception("YouTube-Music-Entdecken fehlgeschlagen")
+        return {"sections": []}
+
+
 @router.get("/mood")
 @router.post("/mood")
-async def mood(request: Request, params: str = ""):
+async def mood(request: Request, params: str = "", title: str = ""):
     _require_session(request)
     if request.method == "POST":
         try:
             body = await request.json()
         except Exception:
             body = {}
-        params = (body.get("params") or params or "") if isinstance(body, dict) else params
+        if isinstance(body, dict):
+            params = body.get("params") or params or ""
+            title = body.get("title") or title or ""
     params = (params or "").strip()
-    if not params:
+    title = (title or "").strip()
+    if not params and not title:
         return {"playlists": []}
     try:
-        items = await catalog.mood_playlists(params)
+        items = await catalog.mood_playlists(params, title)
         return {"playlists": _decorate(items)}
-    except Exception as exc:
+    except Exception:
         logger.exception("Playlists für Entdecken-Kategorie fehlgeschlagen")
         return {"playlists": []}
 

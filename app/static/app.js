@@ -843,16 +843,20 @@
     setTitle("Entdecken");
     loading();
 
-    const [charts, moods, podcasts] = await Promise.all([
+    const [explore, charts, moods, podcasts] = await Promise.all([
+      api("/api/explore").catch(() => ({ sections: [] })),
       api("/api/charts").catch(() => ({ sections: [] })),
       api("/api/moods").catch(() => ({ sections: [] })),
       api("/api/podcasts").catch(() => ({ subscribed: [], newEpisodes: [] })),
     ]);
 
     const fragment = document.createDocumentFragment();
-    fragment.append(pageHead("Entdecken", "Charts, Stimmungen und Podcasts"));
+    fragment.append(pageHead("Entdecken", "Vorschläge von YouTube Music"));
+    const exploreSections = explore.sections || [];
     const moodSections = moods.sections || [];
     const chartSections = charts.sections || [];
+
+    fragment.append(sectionsFragment(exploreSections));
 
     for (const section of moodSections) {
       fragment.append(
@@ -861,7 +865,7 @@
           element(
             "div",
             { class: "chips" },
-            section.items.map((item) =>
+            (section.items || []).map((item) =>
               element("button", {
                 class: "chip",
                 text: item.title,
@@ -892,7 +896,13 @@
 
     fragment.append(sectionsFragment(chartSections));
 
-    if (!moodSections.length && !chartSections.length && !(podcasts.subscribed || []).length && !(podcasts.newEpisodes || []).length) {
+    if (
+      !exploreSections.length &&
+      !moodSections.length &&
+      !chartSections.length &&
+      !(podcasts.subscribed || []).length &&
+      !(podcasts.newEpisodes || []).length
+    ) {
       fragment.append(element("div", { class: "empty", text: "Nichts zu entdecken – prüfe die Verbindung." }));
     }
     $("view").replaceChildren(fragment);
@@ -901,9 +911,13 @@
   async function renderMood(params, title) {
     setTitle(title || "Kategorie");
     loading();
-    const data = await api("/api/mood", { method: "POST", body: { params: params || "" } });
+    const data = await api("/api/mood", {
+      method: "POST",
+      body: { params: params || "", title: title || "" },
+    });
     const items = data.playlists || [];
     $("view").replaceChildren(
+      pageHead(title || "Kategorie", "Playlists von YouTube Music"),
       items.length
         ? element("div", { class: "grid" }, items.map(itemCard))
         : element("div", { class: "empty", text: "Keine Playlists in dieser Kategorie." })

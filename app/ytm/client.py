@@ -662,15 +662,210 @@ def _charts_for(code: str) -> list[dict]:
         return []
 
 
+def _walk_catalog_dicts(payload: Any):
+    """Yield dicts that look like YTM albums, playlists or tracks."""
+    if isinstance(payload, dict):
+        if any(payload.get(key) for key in ("playlistId", "browseId", "videoId", "audioPlaylistId")):
+            yield payload
+        for nested in payload.values():
+            if isinstance(nested, (list, dict)):
+                yield from _walk_catalog_dicts(nested)
+    elif isinstance(payload, list):
+        for entry in payload:
+            yield from _walk_catalog_dicts(entry)
+
+
+def _map_catalog_entry(entry: dict, prefer: str | None = None) -> dict | None:
+    if not isinstance(entry, dict):
+        return None
+
+    browse = str(entry.get("browseId") or "")
+    playlist_id = str(entry.get("playlistId") or "")
+    type_name = str(entry.get("type") or entry.get("resultType") or "").lower()
+    video_id = entry.get("videoId")
+
+    if prefer == "album" or browse.startswith("MPRE") or type_name in {"album", "ep", "single"}:
+        item = mapper.normalize_album(entry)
+        if item:
+            item["kind"] = "album"
+            return item
+
+    if prefer == "song" or (video_id and type_name in {"", "song", "video"}):
+        if video_id and not (prefer == "playlist" and playlist_id and not video_id):
+            item = mapper.normalize_song(entry)
+            if item:
+                item["kind"] = "video" if type_name == "video" else "song"
+                return item
+
+    if (
+        prefer == "playlist"
+        or playlist_id
+        or browse.startswith(("VL", "PL", "OL", "RD"))
+        or type_name in {"playlist", "featured_playlist", "community_playlist"}
+    ):
+        item = mapper.normalize_playlist(entry)
+        if item:
+            item["kind"] = "playlist"
+            return item
+
+    if browse.startswith("UC") or type_name == "artist":
+        item = mapper.normalize_artist(entry)
+        if item:
+            item["kind"] = "artist"
+            return item
+
+    if video_id:
+        item = mapper.normalize_song(entry)
+        if item:
+            item["kind"] = "song"
+            return item
+
+    item = mapper.normalize_playlist(entry) or mapper.normalize_album(entry)
+    if item:
+        item["kind"] = "album" if str(item.get("id") or "").startswith("MPRE") else "playlist"
+        return item
+    return None
+
+
+def _unique_catalog(items: list[dict]) -> list[dict]:
+    seen: set[tuple[str, str]] = set()
+    unique = []
+    for item in items:
+        if not item:
+            continue
+        key = (str(item.get("kind") or ""), str(item.get("id") or ""))
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def _parse_mood_renderer(node: dict) -> dict | None:
+    """Parse one mood-category tile without aborting the whole shelf."""
+    try:
+        from ytmusicapi.navigation import nav
+        from ytmusicapi.parsers.browsing import parse_album, parse_playlist, parse_song, parse_song_flat
+    except Exception:
+        return None
+
+    two_row = node.get("musicTwoRowItemRenderer")
+    if two_row:
+        page_type = nav(
+            two_row,
+            [
+                "title",
+                "runs",
+                0,
+                "navigationEndpoint",
+                "browseEndpoint",
+                "browseEndpointContextSupportedConfigs",
+                "browseEndpointContextMusicConfig",
+                "pageType",
+            ],
+            True,
+        )
+        parsers = []
+        if page_type in {"MUSIC_PAGE_TYPE_ALBUM", "MUSIC_PAGE_TYPE_AUDIOBOOK"}:
+            parsers = [parse_album]
+        elif page_type == "MUSIC_PAGE_TYPE_PLAYLIST":
+            parsers = [parse_playlist]
+        else:
+            parsers = [parse_playlist, parse_album, parse_song]
+        for parse in parsers:
+            try:
+                parsed = parse(two_row)
+            except Exception:
+                continue
+            if parsed:
+                return parsed
+        return None
+
+    list_item = node.get("musicResponsiveListItemRenderer")
+    if list_item:
+        try:
+            return parse_song_flat(list_item)
+        except Exception:
+            return None
+    return None
+
+
+def _mood_playlists_from_browse(params: str) -> list[dict]:
+    """Read FEmusic_moods_and_genres_category item-by-item.
+
+    ytmusicapi.get_mood_playlists() runs parse_playlist on every tile. Mixed
+    album/radio carousels then throw and the whole category comes back empty.
+    """
+    try:
+        from ytmusicapi.navigation import nav
+    except Exception:
+        return []
+
+    try:
+        from ytmusicapi.navigation import CAROUSEL_CONTENTS, GRID_ITEMS, SECTION_LIST, SINGLE_COLUMN_TAB
+    except Exception:
+        SINGLE_COLUMN_TAB = ["contents", "singleColumnBrowseResultsRenderer", "tabs", 0, "tabRenderer", "content"]
+        SECTION_LIST = ["sectionListRenderer", "contents"]
+        GRID_ITEMS = ["gridRenderer", "items"]
+        CAROUSEL_CONTENTS = ["musicCarouselShelfRenderer", "contents"]
+
+    try:
+        response = client()._send_request(
+            "browse",
+            {"browseId": "FEmusic_moods_and_genres_category", "params": params},
+        )
+    except Exception as exc:
+        logger.warning("Mood-Kategorie konnte nicht gelesen werden: {}", exc)
+        return []
+
+    sections = nav(response, SINGLE_COLUMN_TAB + SECTION_LIST, True) or []
+    mapped = []
+    for section in sections:
+        contents = (
+            nav(section, GRID_ITEMS, True)
+            or nav(section, CAROUSEL_CONTENTS, True)
+            or nav(section, ["musicImmersiveCarouselShelfRenderer", "contents"], True)
+            or nav(section, ["musicShelfRenderer", "contents"], True)
+            or []
+        )
+        for node in contents:
+            if not isinstance(node, dict):
+                continue
+            parsed = _parse_mood_renderer(node)
+            item = _map_catalog_entry(parsed) if parsed else None
+            if item:
+                mapped.append(item)
+    return _unique_catalog(mapped)
+
+
+def _search_mood_playlists(title: str) -> list[dict]:
+    if not title.strip():
+        return []
+    mapped = []
+    for filt in ("featured_playlists", "playlists", "community_playlists"):
+        try:
+            found = client().search(title.strip(), filter=filt, limit=24)
+        except Exception as exc:
+            logger.debug("Playlist-Suche ({}) für „{}“ fehlgeschlagen: {}", filt, title, exc)
+            continue
+        for entry in found or []:
+            item = _map_catalog_entry(entry if isinstance(entry, dict) else {}, prefer="playlist")
+            if item:
+                mapped.append(item)
+        if mapped:
+            break
+    return _unique_catalog(mapped)
+
+
 def mood_categories() -> list[dict]:
     """YouTube Music's "Moods & Genres" tree, flattened into sections."""
 
-    def produce() -> list[dict]:
+    def produce() -> list[dict] | None:
         try:
             raw = client().get_mood_categories()
         except Exception as exc:
             logger.error("Stimmungen/Genres konnten nicht geladen werden: {}", exc)
-            return []
+            return None
 
         sections = []
         for title, entries in (raw or {}).items():
@@ -681,44 +876,70 @@ def mood_categories() -> list[dict]:
             ]
             if items:
                 sections.append({"title": title, "items": items})
-        return sections
+        return sections or None
 
-    return _cached("moods", produce, ttl=86400) or []
+    return _cached("moods", produce, ttl=1800) or []
 
 
-def mood_playlists(params: str) -> list[dict]:
-    key = f"mood:{params}"
+def mood_playlists(params: str, title: str = "") -> list[dict]:
+    key = f"mood:{params}:{title}"
     hit = _cache.get(key)
     if hit:
         return hit
 
+    items: list[dict] = []
     try:
         raw = client().get_mood_playlists(params)
+        items = _unique_catalog([_map_catalog_entry(entry) for entry in _walk_catalog_dicts(raw)])
     except Exception as exc:
-        logger.error("Playlists für Kategorie konnten nicht geladen werden: {}", exc)
-        return []
+        logger.warning("get_mood_playlists fehlgeschlagen ({}), parse Browse-Seite", exc)
 
-    items = []
-    for entry in raw or []:
-        if not isinstance(entry, dict):
-            continue
-        try:
-            browse = str(entry.get("browseId") or entry.get("playlistId") or entry.get("id") or "")
-            if browse.startswith("MPRE") or browse.startswith("VLMPRE"):
-                item = mapper.normalize_album(entry)
-                if item:
-                    item["kind"] = "album"
-                    items.append(item)
-                continue
-            item = mapper.normalize_playlist(entry)
-            if item:
-                item["kind"] = "playlist"
-                items.append(item)
-        except Exception as exc:
-            logger.debug("Kategorie-Eintrag übersprungen: {}", exc)
+    if not items:
+        items = _mood_playlists_from_browse(params)
+
+    if not items and title:
+        items = _search_mood_playlists(title)
+
     if items:
-        _cache.set(key, items, 21600)
+        _cache.set(key, items, 3600)
+    else:
+        logger.warning("Keine Playlists für Mood-Kategorie (title={!r})", title)
     return items
+
+
+def explore() -> list[dict]:
+    """YouTube Music Explore feed: new albums, trending, videos, top songs."""
+
+    labels = {
+        "new_releases": "Neue Alben",
+        "top_songs": "Top-Songs",
+        "trending": "Im Trend",
+        "new_videos": "Neue Videos",
+        "top_episodes": "Beliebte Episoden",
+    }
+
+    def produce() -> list[dict] | None:
+        try:
+            raw = client().get_explore()
+        except Exception as exc:
+            logger.error("YouTube-Music-Entdecken konnte nicht geladen werden: {}", exc)
+            return None
+
+        sections = []
+        for key, title in labels.items():
+            block = (raw or {}).get(key)
+            entries = []
+            if isinstance(block, dict):
+                entries = block.get("items") or block.get("tracks") or []
+            elif isinstance(block, list):
+                entries = block
+            prefer = "album" if key == "new_releases" else "song" if key in {"top_songs", "trending", "new_videos"} else None
+            items = _unique_catalog([_map_catalog_entry(entry, prefer=prefer) for entry in entries or []])
+            if items:
+                sections.append({"title": title, "items": items})
+        return sections or None
+
+    return _cached("explore", produce, ttl=1800) or []
 
 
 def podcast(podcast_id: str, limit: int = 100) -> dict | None:

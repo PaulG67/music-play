@@ -176,8 +176,12 @@ async def mood_categories() -> list[dict]:
     return await run_in_threadpool(ytm.mood_categories)
 
 
-async def mood_playlists(params: str) -> list[dict]:
-    return await run_in_threadpool(ytm.mood_playlists, params)
+async def mood_playlists(params: str, title: str = "") -> list[dict]:
+    return await run_in_threadpool(ytm.mood_playlists, params, title)
+
+
+async def explore() -> list[dict]:
+    return await run_in_threadpool(ytm.explore)
 
 
 def _persist_podcast(podcast: dict) -> None:
