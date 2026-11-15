@@ -9,7 +9,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 APP_NAME = "Music Play"
-APP_VERSION = "1.9.2"
+APP_VERSION = "1.9.3"
 SUBSONIC_API_VERSION = "1.16.1"
 
 CONFIG_DIR = Path(os.getenv("CONFIG_DIR", "/config"))
@@ -107,6 +107,7 @@ class Settings(BaseModel):
     navidrome_user: str = _env("NAVIDROME_USER", "")
     navidrome_password: str = _env("NAVIDROME_PASSWORD", "")
     navidrome_music_dir: str = os.getenv("NAVIDROME_MUSIC_DIR", "/music")
+    navidrome_music_host: str = _env("NAVIDROME_MUSIC_HOST", "/mnt/user/music")
     navidrome_import_folder: str = _env("NAVIDROME_IMPORT_FOLDER", "YouTube")
 
     mediasync_url: str = os.getenv("MEDIASYNC_URL", "").rstrip("/")

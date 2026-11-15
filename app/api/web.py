@@ -915,7 +915,7 @@ async def save_navidrome(request: Request, payload: dict = Body(...)):
                 "username": stored.get("username") or "",
                 "password": stored.get("password") or "",
                 "music_dir": payload.get("musicDir") or stored.get("music_dir"),
-                "import_folder": payload.get("importFolder") or stored.get("import_folder"),
+                "import_folder": payload["importFolder"] if "importFolder" in payload else stored.get("import_folder"),
             }
         )
     from app.navidrome import context as nd_context

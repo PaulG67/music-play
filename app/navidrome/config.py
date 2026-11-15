@@ -19,6 +19,44 @@ from app.navidrome import context as nd_context
 CONFIG_FILE = CONFIG_DIR / "navidrome.json"
 _lock = threading.Lock()
 _cache: dict | None = None
+ROOT_FOLDER = "."
+
+
+def normalize_import_folder(value: str | None) -> str:
+    """`.` or `/` (or empty) means the music library root, not a YouTube subfolder."""
+    text = clean_secret(str(value or "")).replace("\\", "/").strip()
+    lowered = text.rstrip("/")
+    if lowered in {"", ".", "./", "/"}:
+        return ROOT_FOLDER
+    parts = [part for part in lowered.split("/") if part and part not in {".", ".."}]
+    return "/".join(parts) or ROOT_FOLDER
+
+
+def is_import_root(folder: str | None) -> bool:
+    return normalize_import_folder(folder) == ROOT_FOLDER
+
+
+def _host_music() -> str:
+    return (settings.navidrome_music_host or "/mnt/user/music").rstrip("/")
+
+
+def import_paths(folder: str | None, music_dir: str | None = None) -> dict:
+    container = (music_dir or "/music").rstrip("/") or "/music"
+    host = _host_music()
+    normalized = normalize_import_folder(folder)
+    if normalized == ROOT_FOLDER:
+        return {
+            "importFolder": ROOT_FOLDER,
+            "importFolderIsRoot": True,
+            "importPath": container,
+            "importPathUnraid": host,
+        }
+    return {
+        "importFolder": normalized,
+        "importFolderIsRoot": False,
+        "importPath": f"{container}/{normalized}",
+        "importPathUnraid": f"{host}/{normalized}",
+    }
 
 
 def _defaults() -> dict:
@@ -37,7 +75,7 @@ def _write_unlocked(data: dict) -> None:
         "username": data.get("username") or "",
         "password": secret_box.seal(data.get("password") or ""),
         "music_dir": data.get("music_dir") or "/music",
-        "import_folder": data.get("import_folder") or "YouTube",
+        "import_folder": normalize_import_folder(data.get("import_folder")),
     }
     secret_box.write_private_file(CONFIG_FILE, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
@@ -64,7 +102,7 @@ def _read_unlocked() -> dict:
                 if loaded.get("music_dir") is not None:
                     data["music_dir"] = clean_secret(str(loaded.get("music_dir") or data["music_dir"])) or data["music_dir"]
                 if loaded.get("import_folder") is not None:
-                    data["import_folder"] = clean_secret(str(loaded.get("import_folder") or data["import_folder"])) or data["import_folder"]
+                    data["import_folder"] = normalize_import_folder(loaded.get("import_folder"))
         except (OSError, json.JSONDecodeError, TypeError):
             pass
     elif data.get("password"):
@@ -109,7 +147,9 @@ def save(payload: dict) -> dict:
         "username": clean_secret(str(payload.get("username") or "")),
         "password": clean_secret(str(password or "")),
         "music_dir": clean_secret(str(payload.get("music_dir") or current.get("music_dir") or "/music")) or "/music",
-        "import_folder": clean_secret(str(payload.get("import_folder") or current.get("import_folder") or "YouTube")) or "YouTube",
+        "import_folder": normalize_import_folder(
+            payload["import_folder"] if "import_folder" in payload else current.get("import_folder")
+        ),
     }
     with _lock:
         _write_unlocked(data)
@@ -133,8 +173,11 @@ def music_dir() -> Path:
 
 
 def import_root() -> Path:
-    folder = load().get("import_folder") or "YouTube"
-    return music_dir() / folder
+    root = music_dir()
+    folder = normalize_import_folder(load().get("import_folder"))
+    if folder == ROOT_FOLDER:
+        return root
+    return root / folder
 
 
 def music_dir_writable() -> bool:
@@ -149,12 +192,18 @@ def music_dir_writable() -> bool:
 
 def public_view() -> dict:
     data = load()
+    music = data.get("music_dir") or "/music"
+    paths = import_paths(data.get("import_folder"), music)
     return {
         "configured": configured(),
         "url": data.get("url") or "",
         "username": data.get("username") or "",
         "passwordSet": bool(data.get("password")),
-        "musicDir": data.get("music_dir") or "/music",
-        "importFolder": data.get("import_folder") or "YouTube",
+        "musicDir": music,
+        "musicHostDir": _host_music(),
+        "importFolder": paths["importFolder"],
+        "importFolderIsRoot": paths["importFolderIsRoot"],
+        "importPath": paths["importPath"],
+        "importPathUnraid": paths["importPathUnraid"],
         "musicDirWritable": music_dir_writable(),
     }

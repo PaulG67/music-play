@@ -1702,6 +1702,20 @@
     ]);
   }
 
+  function importPathHint(nd, folder) {
+    const raw = String(folder ?? "").trim().replace(/\\/g, "/");
+    const root = !raw || raw === "." || raw === "./" || raw === "/";
+    const container = (nd.musicDir || "/music").replace(/\/$/, "");
+    const unraid = (nd.musicHostDir || "/mnt/user/music").replace(/\/$/, "");
+    const tail = root ? "" : "/" + raw.replace(/^\/+|\/+$/g, "");
+    return `Im Container: ${container}${tail}   ·   Auf Unraid: ${unraid}${tail}  (Share „Musikbibliothek“)`;
+  }
+
+  function updateImportPathHint(nd) {
+    const node = $("nd-folder-path");
+    if (node) node.textContent = importPathHint(nd, $("nd-folder")?.value);
+  }
+
   function navidromeSettings(status) {
     const nd = status.navidrome || {};
     state.navidrome = nd;
@@ -1711,7 +1725,7 @@
         url: $("nd-url").value.trim(),
         username: $("nd-user").value.trim(),
         password: $("nd-pass").value,
-        importFolder: $("nd-folder").value.trim() || "YouTube",
+        importFolder: $("nd-folder").value,
         musicDir: nd.musicDir,
       };
     }
@@ -1745,22 +1759,26 @@
           element("input", {
             type: "text",
             id: "nd-folder",
-            value: nd.importFolder || "YouTube",
-            placeholder: "YouTube",
+            value: nd.importFolderIsRoot ? "." : nd.importFolder || ".",
+            placeholder: ".  = direkt unter /music",
+            oninput: () => updateImportPathHint(nd),
           }),
           element("p", {
             class: "muted",
-            text: "Unterordner in deiner Navidrome-Musikbibliothek. Wenn du einen Titel aus YouTube Music nach Navidrome lädst, wird die Datei hier abgelegt – nicht ins Wurzelverzeichnis der ganzen Sammlung. „YouTube“ ist nur der vorgeschlagene Ordnername, du kannst ihn ändern.",
+            text: "Unterordner in der Musikbibliothek, z. B. YouTube. Für die Root-Bibliothek . oder / eintragen – dann landen die Titel direkt unter /music (Interpret/Album/…), nicht in einem YouTube-Ordner. Leeres Feld gilt ebenfalls als Root.",
+          }),
+          element("p", {
+            class: "muted",
+            id: "nd-folder-path",
+            text: importPathHint(nd, nd.importFolderIsRoot ? "." : nd.importFolder),
           }),
         ]),
-        nd.configured
-          ? element("p", {
+        nd.musicDirWritable
+          ? null
+          : element("p", {
               class: "muted",
-              text: nd.musicDirWritable
-                ? `Aktueller Pfad: ${nd.musicDir}/${nd.importFolder || "YouTube"}`
-                : `Musikordner nicht beschreibbar (${nd.musicDir}). In Unraid denselben Pfad wie Navidrome als /music einhängen.`,
-            })
-          : null,
+              text: `Musikordner nicht beschreibbar (${nd.musicDir || "/music"}). In Unraid denselben Share wie Navidrome unter „Musikbibliothek“ einhängen.`,
+            }),
         element("div", { class: "row-buttons" }, [
           element("button", {
             class: "chip",

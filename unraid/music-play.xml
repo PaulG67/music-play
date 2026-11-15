@@ -128,8 +128,12 @@
           Description="Denselben Ordner wie in Navidrome einhängen (meist /mnt/user/music). Nur so kann Music Play Titel nach Navidrome speichern. Ohne diesen Pfad bleiben Downloads nur im Cache."
           Type="Path" Display="always" Required="false" Mask="false">/mnt/user/music</Config>
 
+  <Config Name="Unraid-Musikpfad (Anzeige)" Target="NAVIDROME_MUSIC_HOST" Default="/mnt/user/music" Mode=""
+          Description="Derselbe Unraid-Pfad wie unter Musikbibliothek, nur damit die App anzeigen kann, wo die Dateien auf dem NAS liegen. Standard /mnt/user/music."
+          Type="Variable" Display="advanced" Required="false" Mask="false">/mnt/user/music</Config>
+
   <Config Name="Navidrome-Importordner" Target="NAVIDROME_IMPORT_FOLDER" Default="YouTube" Mode=""
-          Description="Unterordner in der Musikbibliothek, in den YouTube-Imports gelegt werden, z. B. YouTube. Die Dateien liegen dann unter /music/YouTube/Interpret/Album/."
+          Description="Unterordner für Imports, z. B. YouTube → /mnt/user/music/YouTube/…. Punkt oder Schrägstrich (. oder /) = direkt in die Musik-Root /mnt/user/music (Interpret/Album/…)."
           Type="Variable" Display="advanced" Required="false" Mask="false">YouTube</Config>
 
   <Config Name="MediaSync-URL" Target="MEDIASYNC_URL" Default="" Mode=""
