@@ -1328,11 +1328,13 @@ input[type="range"]::-moz-range-thumb {
 .sheet {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 140;
   background: rgba(0, 0, 0, 0.65);
   display: flex;
   align-items: flex-end;
+  pointer-events: auto;
 }
+.sheet[hidden] { display: none !important; }
 .sheet-body {
   width: 100%;
   background: #282828;
@@ -1340,6 +1342,41 @@ input[type="range"]::-moz-range-thumb {
   padding: 18px 18px calc(var(--safe-bottom) + 18px);
   max-height: 75vh;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+.sheet-list {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  flex: 1;
+  min-height: 120px;
+  max-height: 42vh;
+}
+.sheet-footer {
+  position: sticky;
+  bottom: 0;
+  margin: 8px -4px 0;
+  padding-top: 10px;
+  background: #282828;
+  z-index: 1;
+}
+.sheet-footer .chip,
+.sheet-footer button.action.primary {
+  display: block;
+  width: 100%;
+  text-align: center;
+  margin-top: 8px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 0;
+  background: var(--accent);
+  color: #000;
+  font-weight: 700;
+  font-size: 16px;
+}
+.sheet-footer button.action.primary:disabled {
+  opacity: 0.55;
 }
 @media (min-width: 900px) {
   .sheet { align-items: center; justify-content: center; }

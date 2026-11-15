@@ -244,6 +244,7 @@
   $("sheet").addEventListener("click", (event) => {
     if (event.target === $("sheet")) closeSheet();
   });
+  $("sheet-body")?.addEventListener("click", (event) => event.stopPropagation());
 
   const { Player, Offline, EQ } = window.SM;
 
@@ -2193,9 +2194,14 @@
         body: { videoIds: pending.map((track) => track.id) },
       });
       jobs = await waitForJobs(result.jobs, button);
+      const byVideo = {};
+      (jobs || []).forEach((job) => {
+        if (job.videoId && job.navidromeId) byVideo[job.videoId] = job.navidromeId;
+      });
       pending.forEach((track) => {
         track.inLibrary = true;
         track.source = "both";
+        if (byVideo[track.id]) track.navidromeId = byVideo[track.id];
       });
     }
     if (button) {
@@ -2219,8 +2225,8 @@
     return [...new Set([...fromJobs, ...fromTracks])];
   }
 
-  async function sendToNavidrome(tracks, playlistId, playlistName) {
-    const jobs = await importToNavidrome(tracks);
+  async function sendToNavidrome(tracks, playlistId, playlistName, button) {
+    const jobs = await importToNavidrome(tracks, button);
     const songIds = navidromeSongIds(tracks, jobs);
     if (playlistName && !playlistId) {
       await api("/api/navidrome/playlists", { method: "POST", body: { name: playlistName, songIds } });
@@ -2228,6 +2234,9 @@
       return;
     }
     if (playlistId && playlistId !== "library") {
+      if (!songIds.length) {
+        throw new Error("Titel ist noch nicht in Navidrome. Import abwarten oder unter Konfig den Musik-Pfad prüfen.");
+      }
       await api(`/api/navidrome/playlist/${encodeURIComponent(playlistId)}/tracks`, {
         method: "POST",
         body: { songIds },
@@ -2853,49 +2862,46 @@
     return result;
   }
 
-  function playlistButton(target, last, tracks) {
-    const selected = last.playlistId === target.id;
-    return element("button", {
-      class: `action${selected ? " active" : ""}`,
-      text: selected ? `✓ ${target.name}` : target.name,
-      onclick: async () => {
-        try {
-          await sendToMediaSync(tracks, target.id);
-          closeSheet();
-        } catch (error) {
-          toast(error.message);
-        }
-      },
-    });
+  function targetKey(target) {
+    return `${target.source || "navidrome"}:${target.id}`;
   }
 
-  function downloadTargetButton(target, last, tracks) {
-    const selected = last.playlistId === target.id && last.source === target.source;
-    const label = target.source === "navidrome" ? `Navidrome · ${target.name}` : target.name;
-    return element("button", {
-      class: `action${selected ? " active" : ""}`,
-      text: selected ? `✓ ${label}` : label,
-      onclick: async () => {
-        try {
-          if (target.source === "navidrome") {
-            await sendToNavidrome(tracks, target.id, "");
-          } else {
-            await sendToMediaSync(tracks, target.id);
-          }
-          try {
-            localStorage.setItem(
-              MEDIASYNC_TARGET_KEY,
-              JSON.stringify({ playlistId: target.id || "", playlistName: target.name || "", source: target.source })
-            );
-          } catch (error) {
-            /* ignore */
-          }
-          closeSheet();
-        } catch (error) {
-          toast(error.message);
+  function rememberDownloadTarget(target) {
+    try {
+      localStorage.setItem(
+        MEDIASYNC_TARGET_KEY,
+        JSON.stringify({ playlistId: target.id || "", playlistName: target.name || "", source: target.source || "" })
+      );
+    } catch (error) {
+      /* ignore */
+    }
+  }
+
+  async function runDownload(tracks, selected, button) {
+    const list = asTrackList(tracks);
+    const ndTargets = selected.filter((item) => item.source === "navidrome");
+    const msTargets = selected.filter((item) => item.source === "mediasync");
+    if (navidromeReady() && (ndTargets.length || !msTargets.length)) {
+      const jobs = await importToNavidrome(list, button);
+      const songIds = navidromeSongIds(list, jobs);
+      for (const target of ndTargets) {
+        if (!songIds.length) {
+          throw new Error("Titel ist noch nicht in Navidrome. Import abwarten oder unter Konfig den Musik-Pfad prüfen.");
         }
-      },
-    });
+        await api(`/api/navidrome/playlist/${encodeURIComponent(target.id)}/tracks`, {
+          method: "POST",
+          body: { songIds },
+        });
+      }
+    }
+    for (const target of msTargets) {
+      await sendToMediaSync(list, target.id);
+    }
+    if (selected[0]) rememberDownloadTarget(selected[0]);
+    if (ndTargets.length || msTargets.length) {
+      const names = selected.map((item) => item.name).join(", ");
+      toast(selected.length === 1 ? `Heruntergeladen und zu „${names}“ hinzugefügt` : `Heruntergeladen und zu ${selected.length} Playlists hinzugefügt`);
+    }
   }
 
   async function ensureLibraryTargets() {
@@ -2965,11 +2971,50 @@
         ? `${list[0].artist} – ${list[0].title}. Der Titel wird in die Bibliothek geladen und optional einer Playlist zugeordnet.`
         : `${list.length} Titel werden geladen und optional einer Playlist zugeordnet.`;
 
-    const listBox = element("div", {});
+    const selected = new Map();
+    const lastKey = last.playlistId ? `${last.source || "navidrome"}:${last.playlistId}` : "";
+    const preselected = playlists.find((item) => targetKey(item) === lastKey) || null;
+    if (preselected) selected.set(targetKey(preselected), preselected);
+    const preferNavidrome = navidromeReady();
+
+    const listBox = element("div", { class: "sheet-list" });
+    const confirm = element("button", {
+      type: "button",
+      class: "action primary",
+      text: "Herunterladen",
+    });
+
+    const selectedTargets = () => [...selected.values()];
+    const refreshConfirm = () => {
+      const count = selected.size;
+      confirm.textContent = count
+        ? count === 1
+          ? `Herunterladen und zu „${selectedTargets()[0].name}“ hinzufügen`
+          : `Herunterladen und zu ${count} Playlists hinzufügen`
+        : "Herunterladen (nur Bibliothek)";
+    };
+
     const paint = (query) => {
       const needle = (query || "").trim().toLowerCase();
       const shown = playlists.filter((item) => !needle || String(item.name || "").toLowerCase().includes(needle));
-      const children = shown.map((item) => downloadTargetButton(item, last, list));
+      const children = shown.map((item) => {
+        const on = selected.has(targetKey(item));
+        const label = item.source === "navidrome" ? `Navidrome · ${item.name}` : item.name;
+        return element("button", {
+          type: "button",
+          class: `action${on ? " active" : ""}`,
+          text: on ? `✓ ${label}` : label,
+          onclick: (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const key = targetKey(item);
+            if (selected.has(key)) selected.delete(key);
+            else selected.set(key, item);
+            paint(query);
+            refreshConfirm();
+          },
+        });
+      });
       if (!shown.length) {
         children.push(
           element("p", {
@@ -2984,11 +3029,30 @@
       }
       listBox.replaceChildren(...children);
     };
-    paint("");
 
-    const preferNavidrome = navidromeReady();
+    paint("");
+    refreshConfirm();
+
+    const busy = async (work) => {
+      confirm.disabled = true;
+      try {
+        await work();
+        closeSheet();
+      } catch (error) {
+        toast(error.message);
+        confirm.disabled = false;
+        refreshConfirm();
+      }
+    };
+
+    confirm.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      busy(() => runDownload(list, selectedTargets(), confirm));
+    });
+
     const nodes = [
-      element("p", { class: "muted", text: summary }),
+      element("p", { class: "muted", text: `${summary} Playlist antippen zum Auswählen, danach Herunterladen.` }),
       playlists.length > 6
         ? element("input", {
             type: "search",
@@ -2997,37 +3061,25 @@
             oninput: (event) => paint(event.target.value),
           })
         : null,
-      playlists.length ? element("p", { class: "sheet-title", text: preferNavidrome ? "Navidrome- und andere Playlists" : "Bestehende Playlists" }) : null,
+      playlists.length ? element("p", { class: "sheet-title", text: "Playlists antippen (Häkchen = gewählt)" }) : null,
       listBox,
-      element("p", { class: "sheet-title", text: "Weitere Ziele" }),
-      element("button", {
-        class: "action",
-        text: preferNavidrome ? "+ Neue Navidrome-Playlist" : "+ Neue Playlist",
-        onclick: async () => {
-          const name = prompt(preferNavidrome ? "Name der Playlist in Navidrome" : "Name der Playlist in MediaSync");
-          if (!name) return;
-          try {
-            if (preferNavidrome) await sendToNavidrome(list, "", name);
-            else await sendToMediaSync(list, "", name);
-            closeSheet();
-          } catch (error) {
-            toast(error.message);
-          }
-        },
-      }),
-      element("button", {
-        class: "action",
-        text: preferNavidrome ? "Nur Navidrome-Bibliothek (ohne Playlist)" : "Nur Bibliothek (ohne Playlist)",
-        onclick: async () => {
-          try {
-            if (preferNavidrome) await sendToNavidrome(list, "library", "");
-            else await sendToMediaSync(list, "library");
-            closeSheet();
-          } catch (error) {
-            toast(error.message);
-          }
-        },
-      }),
+      element("div", { class: "sheet-footer" }, [
+        confirm,
+        element("button", {
+          type: "button",
+          class: "action",
+          text: preferNavidrome ? "+ Neue Navidrome-Playlist" : "+ Neue Playlist",
+          onclick: async (event) => {
+            event.preventDefault();
+            const name = prompt(preferNavidrome ? "Name der Playlist in Navidrome" : "Name der Playlist in MediaSync");
+            if (!name) return;
+            busy(async () => {
+              if (preferNavidrome) await sendToNavidrome(list, "", name, confirm);
+              else await sendToMediaSync(list, "", name);
+            });
+          },
+        }),
+      ]),
     ];
     openSheet(heading, nodes.filter(Boolean));
   }
