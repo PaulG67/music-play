@@ -13,9 +13,12 @@ TEMPLATE_DIR="/boot/config/plugins/dockerMan/templates-user"
 USER_XML="${TEMPLATE_DIR}/my-music-play.xml"
 IMAGE="ghcr.io/paulg67/music-play:latest"
 REMOTE_XML="https://raw.githubusercontent.com/PaulG67/music-play/main/unraid/music-play.xml"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_XML="${SCRIPT_DIR}/music-play.xml"
+SCRIPT_DIR=""
+SOURCE_XML=""
 TMP_XML=""
+set +u
+SELF="${BASH_SOURCE[0]}"
+set -u
 
 cleanup() {
   if [[ -n "${TMP_XML}" && -f "${TMP_XML}" ]]; then
@@ -24,7 +27,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ ! -f "${SOURCE_XML}" ]]; then
+if [[ -n "${SELF}" && "${SELF}" != "-" && "${SELF}" != "bash" && -f "${SELF}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${SELF}")" && pwd)"
+  if [[ -f "${SCRIPT_DIR}/music-play.xml" ]]; then
+    SOURCE_XML="${SCRIPT_DIR}/music-play.xml"
+  fi
+fi
+
+if [[ -z "${SOURCE_XML}" || ! -f "${SOURCE_XML}" ]]; then
   TMP_XML="$(mktemp /tmp/music-play-xml.XXXXXX)"
   echo "==> Vorlage von GitHub laden"
   curl -fsSL "${REMOTE_XML}" -o "${TMP_XML}"
@@ -64,13 +74,13 @@ echo "==> 2/3 Docker-Image"
 if docker pull "${IMAGE}" 2>/dev/null; then
   echo "    ${IMAGE}"
 else
-  echo "    GHCR-Pull nicht möglich — baue das Image lokal."
-  ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-  if [[ ! -f "${ROOT_DIR}/Dockerfile" ]]; then
-    echo "    Image nicht gezogen. Später: Docker → music-play → Force Update"
-  else
+  echo "    GHCR-Pull nicht möglich."
+  if [[ -n "${SCRIPT_DIR}" && -f "${SCRIPT_DIR}/../Dockerfile" ]]; then
+    ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
     docker build -t "${IMAGE}" "${ROOT_DIR}"
     echo "    lokal gebaut und als ${IMAGE} getaggt"
+  else
+    echo "    Später: Docker → music-play → Force Update"
   fi
 fi
 
