@@ -9,6 +9,7 @@
 
   const state = {
     user: null,
+    isAdmin: false,
     passwordRequired: false,
     stack: [],
     route: null,
@@ -1545,6 +1546,7 @@
     info: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>',
     logout: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17v-3h4v-4h-4V7l-5 5 5 5zm9-14H5a2 2 0 0 0-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/></svg>',
     sleep: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a8 8 0 1 0 8 8h-2a6 6 0 1 1-6-6V4zm7.6.7-1.4 1.4 1.8 1.8 1.4-1.4L19.6 4.7zM12 2h2v3h-2V2z"/></svg>',
+    users: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm-7 9v-1.2A5.8 5.8 0 0 1 10.8 14h2.4A5.8 5.8 0 0 1 19 19.8V21H5zm14.5-9a3.5 3.5 0 1 0-3.2-4.9 5.9 5.9 0 0 1 0 3.8A3.5 3.5 0 0 0 19.5 12zM16 21v-1.2a7.6 7.6 0 0 0-1.1-3.8H18a4.6 4.6 0 0 1 4 2.4V21h-6z"/></svg>',
   };
 
   function moreRow(title, meta, icon, onclick) {
@@ -1623,7 +1625,7 @@
 
     return configCard(
       "Navidrome",
-      "Suche und Vorschläge kommen von YouTube Music. Vorhandene Titel und Playlists kommen aus Navidrome.",
+      "Dein Navidrome-Konto. Playlists und Downloads laufen unter diesem Benutzer – andere Nutzer sehen nur ihre eigenen Listen.",
       ICONS.disc,
       [
       navidromeStatusBox(nd),
@@ -1779,8 +1781,8 @@
 
   function accountSettings(status) {
     return configCard(
-      "Zugang",
-      "Anmeldung in der App. Dieselben Daten gelten für Amperfy. Passwörter liegen verschlüsselt im Config-Ordner.",
+      "Dein Zugang",
+      "Benutzername und Passwort für Music Play und Amperfy (Subsonic). Jeder Nutzer hat eigene Daten.",
       ICONS.lock,
       [
         element("div", { class: "settings-form" }, [
@@ -1838,7 +1840,7 @@
   function amperfySettings(status) {
     return configCard(
       "Amperfy / Subsonic",
-      "Amperfy bringt CarPlay mit – das ist hier das Gegenstück zu Android Auto.",
+      "In Amperfy denselben Benutzernamen und dasselbe Passwort wie hier unter Zugang verwenden.",
       ICONS.phone,
       [
         element("dl", { class: "info" }, [
@@ -1850,6 +1852,74 @@
           element("dd", { text: status.subsonicUser }),
           element("dt", { text: "Passwort" }),
           element("dd", { text: status.passwordRequired ? "wie unter Zugang gesetzt" : "kein Passwort nötig" }),
+        ]),
+      ]
+    );
+  }
+
+  function usersAdminSettings(users) {
+    const items = users || [];
+    return configCard(
+      "Benutzerverwaltung",
+      "Lege Konten an. Jeder Benutzer trägt danach selbst Navidrome- und Subsonic-Daten ein.",
+      ICONS.users,
+      [
+        element(
+          "div",
+          { class: "user-list" },
+          items.map((user) =>
+            element("div", { class: "user-row" }, [
+              element("div", { class: "user-row-text" }, [
+                element("strong", { text: user.username + (user.role === "admin" ? " · Admin" : "") }),
+                element("span", {
+                  text: user.navidromeConfigured
+                    ? `Navidrome: ${user.navidromeUser || "verbunden"}`
+                    : "Navidrome noch nicht eingerichtet",
+                }),
+              ]),
+              user.username === state.user
+                ? element("span", { class: "muted", text: "du" })
+                : element("button", {
+                    class: "chip",
+                    text: "Löschen",
+                    onclick: async () => {
+                      if (!confirm(`Benutzer „${user.username}“ löschen?`)) return;
+                      try {
+                        await api(`/api/users/${encodeURIComponent(user.username)}`, { method: "DELETE" });
+                        toast("Benutzer gelöscht");
+                        render(state.route, true);
+                      } catch (error) {
+                        toast(error.message);
+                      }
+                    },
+                  }),
+            ])
+          )
+        ),
+        element("div", { class: "settings-form" }, [
+          labeledInput("new-user", "Neuer Benutzername", { type: "text", autocomplete: "off", placeholder: "z. B. anna" }),
+          labeledInput("new-pass", "Passwort", { type: "password", autocomplete: "new-password", placeholder: "Mindestens 8 Zeichen" }),
+          labeledInput("new-pass2", "Passwort wiederholen", { type: "password", autocomplete: "new-password" }),
+          element("button", {
+            class: "chip solid",
+            text: "Benutzer anlegen",
+            onclick: async () => {
+              const username = $("new-user").value.trim();
+              const password = $("new-pass").value;
+              const passwordConfirm = $("new-pass2").value;
+              if (!username || !password) {
+                toast("Benutzername und Passwort eingeben");
+                return;
+              }
+              try {
+                await api("/api/users", { method: "POST", body: { username, password, passwordConfirm } });
+                toast(`„${username}“ angelegt`);
+                render(state.route, true);
+              } catch (error) {
+                toast(error.message);
+              }
+            },
+          }),
         ]),
       ]
     );
@@ -1905,9 +1975,10 @@
     const usage = await Offline.usage();
     const nd = status.navidrome || {};
     const ms = status.mediasync || {};
+    const users = status.isAdmin ? await api("/api/users").catch(() => ({ users: [] })) : { users: [] };
 
     $("view").replaceChildren(
-      pageHead("Konfiguration", "Verbindungen und Zugangsdaten an einem Ort."),
+      pageHead("Konfiguration", "Dein Zugang, dein Navidrome. Admins legen weitere Benutzer an."),
       element("div", { class: "config-summary" }, [
         connectionPill(Boolean(status.passwordRequired), status.passwordRequired ? "Zugang" : "Kein Zugang"),
         connectionPill(Boolean(nd.configured && nd.reachable), nd.configured && nd.reachable ? "Navidrome" : "Navidrome aus"),
@@ -1916,6 +1987,7 @@
       element("div", { class: "config-grid" }, [
         accountSettings(status),
         navidromeSettings(status),
+        status.isAdmin ? usersAdminSettings(users.users) : null,
         mediasyncSettings(status),
         amperfySettings(status),
         configCard("System", "Speicher, Dienste und App-Version.", ICONS.info, [
@@ -3143,8 +3215,8 @@
     overlay.hidden = false;
     $("app").hidden = true;
     $("login-lead").textContent = setup
-      ? "Lege Benutzername und ein Passwort (mindestens 8 Zeichen) fest. Danach kannst du die Anmeldung am Proxy abschalten. Passwörter werden verschlüsselt gespeichert."
-      : "Melde dich an, um Music Play zu nutzen.";
+      ? "Lege den ersten Administrator an (mindestens 8 Zeichen). Danach kannst du unter Konfig weitere Benutzer hinzufügen."
+      : "Melde dich mit deinem Music-Play-Konto an.";
     $("login-pass2").hidden = !setup;
     $("login-pass").autocomplete = setup ? "new-password" : "current-password";
     $("login-submit").textContent = setup ? "Zugang speichern" : "Anmelden";
@@ -3186,6 +3258,7 @@
     const session = await api("/api/session").catch(() => ({ authenticated: false, user: null, passwordRequired: false }));
     state.passwordRequired = !!session.passwordRequired;
     state.user = session.user;
+    state.isAdmin = !!session.isAdmin;
     if (!session.authenticated) {
       const hint = await api("/api/login-hint").catch(() => ({ username: "musicplay" }));
       if ($("login-user") && !$("login-user").value) $("login-user").value = hint.username || "";

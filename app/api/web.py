@@ -67,6 +67,13 @@ def _require_session(request: Request) -> str:
     raise HTTPException(status_code=401, detail="Nicht angemeldet")
 
 
+def _require_admin(request: Request) -> str:
+    username = _require_session(request)
+    if not auth_store.is_admin(username):
+        raise HTTPException(status_code=403, detail="Nur Administratoren können Benutzer verwalten")
+    return username
+
+
 def _subsonic_id(item: dict, kind: str) -> str:
     item_id = item.get("id") or ""
     if kind in {"song", "video", "episode"}:
@@ -146,7 +153,7 @@ def _decorate(items: list[dict], kind: str | None = None) -> list[dict]:
 async def login_hint():
     required = auth_store.password_required()
     return {
-        "username": auth_store.username(),
+        "username": "" if required else (auth_store.username() or "musicplay"),
         "passwordRequired": required,
         "version": APP_VERSION,
     }
@@ -166,11 +173,13 @@ def _set_session_cookie(response: Response, token: str, request: Request) -> Non
 
 def _session_payload(user: str | None) -> dict:
     required = auth_store.password_required()
+    record = auth_store.get_user(user) if user else None
     return {
         "authenticated": bool(user),
         "passwordRequired": required,
         "needsSetup": not required,
         "user": user or (auth_store.username() if not required else None),
+        "isAdmin": bool(record and record.get("role") == "admin"),
         "version": APP_VERSION,
         "ytmAccount": ytm.is_authenticated(),
         "location": settings.ytm_location,
@@ -188,14 +197,15 @@ async def login(request: Request):
         payload = {"username": form.get("username"), "password": form.get("password")}
 
     _throttle_login(request)
-    username = web_session.clean_secret(str(payload.get("username") or "")) or auth_store.username()
+    username = web_session.clean_secret(str(payload.get("username") or ""))
     password = payload.get("password") or ""
     if not auth_store.password_required():
         detail = "Zuerst unter Zugang ein Passwort setzen."
         if wants_json:
             raise HTTPException(status_code=401, detail=detail)
         return RedirectResponse("/?login=fail", status_code=303)
-    if not web_session.secrets_equal(username, auth_store.username()) or not web_session.check_password(password):
+    record = auth_store.get_user(username)
+    if record is None or not web_session.check_password(username, password):
         _note_login_failure(request)
         logger.warning("Login fehlgeschlagen")
         detail = "Benutzername oder Passwort falsch."
@@ -204,11 +214,11 @@ async def login(request: Request):
         return RedirectResponse("/?login=fail", status_code=303)
 
     _clear_login_failures(request)
-    token = web_session.issue(auth_store.username())
+    token = web_session.issue(record["username"])
     logger.info("Web-Login erfolgreich")
     if wants_json:
         response = JSONResponse(
-            {"user": auth_store.username(), "token": token, "version": APP_VERSION}
+            {"user": record["username"], "token": token, "version": APP_VERSION, "isAdmin": record.get("role") == "admin"}
         )
         _set_session_cookie(response, token, request)
         return response
@@ -231,11 +241,7 @@ async def whoami(request: Request):
 
 @router.post("/account")
 async def save_account(request: Request, response: Response, payload: dict = Body(...)):
-    """Set or clear the in-app password. Open on first run until a password exists."""
-    if auth_store.password_required():
-        _require_session(request)
-
-    username = web_session.clean_secret(payload.get("username") or "") or auth_store.username()
+    """Create the first admin or update the signed-in user's Subsonic login."""
     if payload.get("password") is None:
         raise HTTPException(status_code=400, detail="Passwort fehlt")
     new_password = web_session.clean_secret(str(payload.get("password")))
@@ -247,11 +253,59 @@ async def save_account(request: Request, response: Response, payload: dict = Bod
     if new_password != confirm:
         raise HTTPException(status_code=400, detail="Passwörter stimmen nicht überein")
 
-    auth_store.save(username, new_password)
-    token = web_session.issue(username)
+    wanted = web_session.clean_secret(payload.get("username") or "")
+    try:
+        if not auth_store.password_required():
+            user = auth_store.ensure_setup_user(wanted or "musicplay", new_password)
+        else:
+            current = _require_session(request)
+            user = auth_store.save_user(current, password=new_password, new_username=wanted or current)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    token = web_session.issue(user["username"])
     _set_session_cookie(response, token, request)
-    logger.info("Zugang aktualisiert - Passwort {}", "gesetzt" if new_password else "entfernt")
-    return {"ok": True, "user": username, "token": token, "passwordRequired": bool(new_password)}
+    logger.info("Zugang aktualisiert für {}", user["username"])
+    return {
+        "ok": True,
+        "user": user["username"],
+        "token": token,
+        "passwordRequired": True,
+        "isAdmin": user.get("role") == "admin",
+    }
+
+
+@router.get("/users")
+async def list_users(request: Request):
+    _require_admin(request)
+    return {"users": auth_store.list_public()}
+
+
+@router.post("/users")
+async def create_user(request: Request, payload: dict = Body(...)):
+    _require_admin(request)
+    username = web_session.clean_secret(payload.get("username") or "")
+    password = web_session.clean_secret(str(payload.get("password") or ""))
+    confirm = web_session.clean_secret(str(payload.get("passwordConfirm") or password))
+    if password != confirm:
+        raise HTTPException(status_code=400, detail="Passwörter stimmen nicht überein")
+    try:
+        user = auth_store.create_user(username, password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "user": user["username"]}
+
+
+@router.delete("/users/{username}")
+async def delete_user(request: Request, username: str):
+    admin = _require_admin(request)
+    if web_session.secrets_equal(username, admin):
+        raise HTTPException(status_code=400, detail="Eigenes Konto bitte über Abmelden nicht löschen – einen anderen Admin nutzen")
+    try:
+        auth_store.delete_user(username)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
 
 
 # --------------------------------------------------------------------------
@@ -748,7 +802,7 @@ async def sponsorblock(request: Request, video_id: str):
 
 @router.get("/status")
 async def status(request: Request):
-    _require_session(request)
+    user = _require_session(request)
     with session_scope() as session:
         library = len(repo.library_track_ids(session))
     return {
@@ -756,7 +810,8 @@ async def status(request: Request):
         "libraryTracks": library,
         "cache": streams.cache_stats(),
         "streamMode": settings.stream_mode,
-        "subsonicUser": auth_store.username(),
+        "subsonicUser": user,
+        "isAdmin": auth_store.is_admin(user),
         "passwordRequired": auth_store.password_required(),
         "translation": {
             "enabled": settings.translation_enabled,
@@ -808,7 +863,7 @@ async def test_navidrome(request: Request, payload: dict | None = Body(None)):
 
 @router.put("/navidrome")
 async def save_navidrome(request: Request, payload: dict = Body(...)):
-    _require_session(request)
+    user = _require_session(request)
     url = (payload.get("url") or "").strip().rstrip("/")
     username = (payload.get("username") or "").strip()
     password = payload.get("password")
@@ -821,17 +876,28 @@ async def save_navidrome(request: Request, payload: dict = Body(...)):
             await run_in_threadpool(navidrome.test_connection, url, username, secret)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Verbindung fehlgeschlagen: {exc}")
-    saved = navidrome_config.save(
-        {
-            "url": url,
-            "username": username,
-            "password": secret or "",
-            "music_dir": payload.get("musicDir") or stored.get("music_dir"),
-            "import_folder": payload.get("importFolder") or stored.get("import_folder"),
-        }
-    )
+    try:
+        auth_store.save_user(
+            user,
+            navidrome={"url": url, "username": username, "password": secret or stored.get("password") or ""},
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if auth_store.is_admin(user):
+        navidrome_config.save(
+            {
+                "url": url or stored.get("url") or "",
+                "username": stored.get("username") or "",
+                "password": stored.get("password") or "",
+                "music_dir": payload.get("musicDir") or stored.get("music_dir"),
+                "import_folder": payload.get("importFolder") or stored.get("import_folder"),
+            }
+        )
+    from app.navidrome import context as nd_context
+
+    nd_context.bind(auth_store.navidrome_credentials(user))
     navidrome.reload_index()
-    return navidrome.status() | {"ok": True, "url": saved.get("url")}
+    return navidrome.status() | {"ok": True, "url": url}
 
 
 @router.get("/navidrome/library")

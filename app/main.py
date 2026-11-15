@@ -14,6 +14,7 @@ from app.core.settings import APP_NAME, APP_VERSION, settings
 from app.db.database import init_db
 from app.navidrome import bridge as navidrome
 from app.navidrome import config as navidrome_config
+from app.navidrome import context as nd_context
 from app.subsonic import media
 from app.subsonic.router import router as subsonic_router
 
@@ -33,7 +34,11 @@ async def lifespan(_: FastAPI):
         "gesetzt" if auth_store.password_required() else "offen",
         "verbunden" if navidrome_config.configured() else "aus",
     )
-    navidrome.warm_index()
+    token = nd_context.bind(auth_store.navidrome_credentials(auth_store.username()))
+    try:
+        navidrome.warm_index()
+    finally:
+        nd_context.reset(token)
     yield
     await media.aclose()
 
@@ -47,7 +52,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.middleware("http")
 async def attach_session(request: Request, call_next):
     request.state.session_user = web_session.read(request)
-    response = await call_next(request)
+    token = nd_context.bind(auth_store.navidrome_credentials(request.state.session_user))
+    try:
+        response = await call_next(request)
+    finally:
+        nd_context.reset(token)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "no-referrer")

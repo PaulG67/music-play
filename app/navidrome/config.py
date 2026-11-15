@@ -14,6 +14,7 @@ from pathlib import Path
 
 from app.core import secret_box
 from app.core.settings import CONFIG_DIR, clean_secret, settings
+from app.navidrome import context as nd_context
 
 CONFIG_FILE = CONFIG_DIR / "navidrome.json"
 _lock = threading.Lock()
@@ -79,14 +80,27 @@ def _read_unlocked() -> dict:
     return dict(_cache)
 
 
-def load() -> dict:
+def server_settings() -> dict:
     with _lock:
         return _read_unlocked()
 
 
+def load() -> dict:
+    data = server_settings()
+    overlay = nd_context.current()
+    if not overlay:
+        return data
+    merged = dict(data)
+    for key in ("url", "username", "password"):
+        value = overlay.get(key)
+        if value:
+            merged[key] = value
+    return merged
+
+
 def save(payload: dict) -> dict:
     global _cache
-    current = load()
+    current = server_settings()
     password = payload.get("password")
     if password is None:
         password = current.get("password") or ""
