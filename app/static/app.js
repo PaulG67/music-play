@@ -2379,6 +2379,19 @@
       );
     }
 
+    if (navidromeReady() && (local || track.navidromeId || String(track.id || "").startsWith("nd:"))) {
+      actions.push(
+        element("button", {
+          class: "action",
+          text: "Albumcover wählen …",
+          onclick: () => {
+            closeSheet();
+            openCoverSheet(track);
+          },
+        })
+      );
+    }
+
     actions.push(
       element("button", {
         class: "action",
@@ -2961,6 +2974,113 @@
       const names = selected.map((item) => item.name).join(", ");
       toast(selected.length === 1 ? `Heruntergeladen und zu „${names}“ hinzugefügt` : `Heruntergeladen und zu ${selected.length} Playlists hinzugefügt`);
     }
+  }
+
+  async function openCoverSheet(track) {
+    const heading = "Albumcover wählen";
+    openSheet(heading, [element("p", { class: "muted", text: "Suche passende Cover …" })]);
+    let data;
+    try {
+      data = await api("/api/covers/search", {
+        method: "POST",
+        body: {
+          videoId: String(track.id || "").startsWith("nd:") ? "" : track.id,
+          title: track.title,
+          artist: track.artist,
+          album: track.album || "",
+          albumId: track.album_id,
+          thumbnail: track.thumbnail,
+          navidromeId: track.navidromeId || (String(track.id || "").startsWith("nd:") ? String(track.id).slice(3) : ""),
+          path: track.path || "",
+        },
+      });
+    } catch (error) {
+      openSheet(heading, [element("p", { class: "muted", text: error.message })]);
+      return;
+    }
+    const candidates = data.candidates || [];
+    if (!candidates.length) {
+      openSheet(heading, [
+        element("p", {
+          class: "muted",
+          text: "Keine Cover gefunden. Album- und Interpretname prüfen oder den Titel zuerst nach Navidrome laden.",
+        }),
+      ]);
+      return;
+    }
+    let chosen = candidates[0];
+    const grid = element("div", { class: "cover-picker" });
+    const paint = () => {
+      grid.replaceChildren(
+        ...candidates.map((item) =>
+          element(
+            "button",
+            {
+              type: "button",
+              class: `cover-option${chosen && chosen.id === item.id ? " selected" : ""}`,
+              onclick: () => {
+                chosen = item;
+                paint();
+              },
+            },
+            [
+              element("img", { src: coverUrl(item.url, 400), alt: item.label || "Cover" }),
+              element("span", { text: `${item.source}: ${item.label}` }),
+            ]
+          )
+        )
+      );
+    };
+    paint();
+    const apply = async (album) => {
+      if (!chosen) return;
+      try {
+        const result = await api("/api/covers/embed", {
+          method: "POST",
+          body: {
+            url: chosen.url,
+            album: !!album,
+            videoId: String(track.id || "").startsWith("nd:") ? "" : track.id,
+            title: track.title,
+            artist: track.artist,
+            album: track.album || "",
+            navidromeId: track.navidromeId || (String(track.id || "").startsWith("nd:") ? String(track.id).slice(3) : ""),
+            path: track.path || "",
+          },
+        });
+        closeSheet();
+        toast(
+          album
+            ? `Cover in ${result.files} Dateien eingebettet`
+            : "Cover in die Audiodatei eingebettet"
+        );
+      } catch (error) {
+        toast(error.message);
+      }
+    };
+    openSheet(heading, [
+      element("p", {
+        class: "muted",
+        text: data.fileFound
+          ? "Cover antippen und einbetten. Navidrome scannt danach neu."
+          : "Cover gefunden, aber die Audiodatei auf dem NAS wurde nicht gefunden. Musik-Pfad in Unraid prüfen.",
+      }),
+      grid,
+      element("div", { class: "sheet-footer" }, [
+        element("button", {
+          type: "button",
+          class: "action primary",
+          text: "In diese Datei einbetten",
+          onclick: () => apply(false),
+        }),
+        element("button", {
+          type: "button",
+          class: "action",
+          text: "Für das ganze Album (Ordner)",
+          onclick: () => apply(true),
+        }),
+      ]),
+    ]);
   }
 
   async function ensureLibraryTargets() {

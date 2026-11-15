@@ -81,7 +81,8 @@ def _write_ffmpeg_tags(source: Path, dest: Path, track: dict) -> None:
         "-y",
         "-i",
         str(source),
-        "-vn",
+        "-map",
+        "0",
         "-c",
         "copy",
         "-metadata",
@@ -185,6 +186,21 @@ def import_track(track: dict) -> dict:
         raise RuntimeError("yt-dlp hat keine Audiodatei erzeugt")
 
     _write_ffmpeg_tags(produced, dest, track)
+    sidecar = next(
+        (
+            path
+            for path in tmp_dir.glob(f"{video_id}*")
+            if path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
+        ),
+        None,
+    )
+    if sidecar:
+        try:
+            from app.navidrome import artwork
+
+            artwork.embed_image_file(dest, sidecar)
+        except Exception as exc:
+            logger.warning("Cover für {} nicht eingebettet: {}", dest.name, exc)
     for leftover in tmp_dir.glob(f"{video_id}*"):
         leftover.unlink(missing_ok=True)
 

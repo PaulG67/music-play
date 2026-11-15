@@ -19,6 +19,7 @@ from app.services import translate as translate_service
 from app.mediasync import bridge as mediasync
 from app.mediasync import config as mediasync_config
 from app.mediasync.client import MediaSyncError
+from app.navidrome import artwork as nd_artwork
 from app.navidrome import bridge as navidrome
 from app.navidrome import config as navidrome_config
 from app.navidrome import ids as nd_ids
@@ -1006,6 +1007,53 @@ async def navidrome_playlist(request: Request, playlist_id: str):
     if data is None:
         raise HTTPException(status_code=404, detail="Playlist nicht gefunden")
     return {**data, "tracks": _decorate(data.get("tracks") or [], "song")}
+
+
+@router.post("/covers/search")
+async def search_covers(request: Request, payload: dict = Body(...)):
+    _require_session(request)
+    track = {
+        "id": payload.get("videoId") or payload.get("id") or "",
+        "videoId": payload.get("videoId") or payload.get("id") or "",
+        "title": payload.get("title") or "",
+        "artist": payload.get("artist") or "",
+        "album": payload.get("album") or "",
+        "album_id": payload.get("albumId") or payload.get("album_id"),
+        "thumbnail": payload.get("thumbnail") or "",
+        "navidromeId": payload.get("navidromeId") or "",
+        "path": payload.get("path") or "",
+    }
+    candidates = await run_in_threadpool(nd_artwork.search_covers, track)
+    path = await run_in_threadpool(nd_artwork.resolve_audio_path, track)
+    return {
+        "candidates": candidates,
+        "file": str(path) if path else "",
+        "fileFound": bool(path),
+    }
+
+
+@router.post("/covers/embed")
+async def embed_cover(request: Request, payload: dict = Body(...)):
+    _require_session(request)
+    url = str(payload.get("url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Kein Cover ausgewählt")
+    track = {
+        "id": payload.get("videoId") or payload.get("id") or "",
+        "videoId": payload.get("videoId") or payload.get("id") or "",
+        "title": payload.get("title") or "",
+        "artist": payload.get("artist") or "",
+        "album": payload.get("album") or "",
+        "navidromeId": payload.get("navidromeId") or "",
+        "path": payload.get("path") or "",
+    }
+    try:
+        result = await run_in_threadpool(
+            lambda: nd_artwork.embed_cover(track, url, album=bool(payload.get("album")))
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
 
 
 @router.get("/navidrome/cover/{cover_id}")
