@@ -471,7 +471,7 @@
     const more = element("span", { class: "track-more", text: "⋯" });
     more.addEventListener("click", (event) => {
       event.stopPropagation();
-      openTrackSheet(track);
+      openTrackSheet(track, { playlist: options.playlist, position });
     });
     row.append(more);
 
@@ -1036,7 +1036,7 @@
         extras,
         "Playlist"
       ),
-      trackList(tracks)
+      trackList(tracks, { playlist: { source: "local", id: playlistId, name: playlist.name } })
     );
   }
 
@@ -1047,7 +1047,7 @@
     const tracks = playlist.tracks || [];
     $("view").replaceChildren(
       playAllHeader(playlist.name, `${tracks.length} Titel`, playlist.thumbnail, tracks, [], "Playlist"),
-      trackList(tracks)
+      trackList(tracks, { playlist: { source: "navidrome", id: playlistId, name: playlist.name } })
     );
   }
 
@@ -2307,9 +2307,10 @@
     });
   }
 
-  function openTrackSheet(track) {
+  function openTrackSheet(track, options = {}) {
     const cached = Offline.has(track.id);
     const local = isLocalTrack(track);
+    const playlistCtx = options.playlist;
     const actions = [
       element("button", {
         class: "action",
@@ -2330,6 +2331,40 @@
         },
       }),
     ];
+
+    if (playlistCtx && (playlistCtx.source === "local" || playlistCtx.source === "navidrome")) {
+      actions.push(
+        element("button", {
+          class: "action",
+          text: "Aus Playlist entfernen",
+          onclick: async () => {
+            try {
+              if (playlistCtx.source === "navidrome") {
+                const songId = track.navidromeId || String(track.id || "").replace(/^nd:/, "");
+                await api(`/api/navidrome/playlist/${encodeURIComponent(playlistCtx.id)}/remove-tracks`, {
+                  method: "POST",
+                  body: {
+                    index: options.position,
+                    indexes: options.position != null ? [options.position] : [],
+                    songIds: songId ? [songId] : [],
+                  },
+                });
+              } else {
+                await api(`/api/playlist/${playlistCtx.id}/remove-tracks`, {
+                  method: "POST",
+                  body: { index: options.position, trackId: track.id, sid: track.sid },
+                });
+              }
+              closeSheet();
+              toast("Aus der Playlist entfernt");
+              if (state.route) render(state.route, true);
+            } catch (error) {
+              toast(error.message);
+            }
+          },
+        })
+      );
+    }
 
     if (mediasyncReady() || navidromeReady()) {
       actions.push(

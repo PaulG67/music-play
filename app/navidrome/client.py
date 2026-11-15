@@ -378,6 +378,31 @@ class NavidromeClient:
             return
         self._rest("updatePlaylist", {"playlistId": raw_id, "songIdToAdd": ids})
 
+    def remove_songs_from_playlist(
+        self,
+        playlist_id: str,
+        *,
+        indexes: list[int] | None = None,
+        song_ids: list[str] | None = None,
+    ) -> None:
+        raw_id = nd_ids.unwrap(playlist_id) or playlist_id
+        if not raw_id:
+            raise NavidromeError("Ungültige Playlist", 400)
+        remove_indexes = [int(item) for item in (indexes or []) if item is not None]
+        raw_songs = [nd_ids.unwrap(item) or item for item in (song_ids or []) if item]
+        if not remove_indexes and raw_songs:
+            playlist = self.get_playlist(raw_id) or {}
+            wanted = set(raw_songs)
+            for position, track in enumerate(playlist.get("tracks") or []):
+                nid = str(track.get("navidromeId") or "")
+                tid = str(track.get("id") or "").removeprefix("nd:")
+                if nid in wanted or tid in wanted:
+                    remove_indexes.append(position)
+                    break
+        if not remove_indexes:
+            raise NavidromeError("Titel nicht in der Playlist", 404)
+        self._rest("updatePlaylist", {"playlistId": raw_id, "songIndexToRemove": remove_indexes})
+
     def create_playlist(self, name: str, song_ids: list[str], playlist_id: str | None = None) -> str | None:
         params = self._auth_params()
         if playlist_id:

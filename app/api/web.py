@@ -794,6 +794,38 @@ async def add_to_playlist(request: Request, playlist_id: int, payload: dict = Bo
     return {"ok": True}
 
 
+@router.post("/playlist/{playlist_id}/remove-tracks")
+async def remove_from_playlist(request: Request, playlist_id: int, payload: dict = Body(...)):
+    _require_session(request)
+    track_ids = [str(item) for item in (payload.get("trackIds") or []) if item]
+    if payload.get("trackId"):
+        track_ids.append(str(payload.get("trackId")))
+    for sid in payload.get("tracks") or []:
+        kind, video_id = ids.parse(sid)
+        if kind == ids.SONG and video_id:
+            track_ids.append(video_id)
+    if payload.get("sid"):
+        kind, video_id = ids.parse(str(payload.get("sid")))
+        if kind == ids.SONG and video_id:
+            track_ids.append(video_id)
+    index = payload.get("index")
+    try:
+        index = int(index) if index is not None and str(index) != "" else None
+    except (TypeError, ValueError):
+        index = None
+    with session_scope() as session:
+        if repo.get_playlist(session, playlist_id) is None:
+            raise HTTPException(status_code=404, detail="Playlist nicht gefunden")
+        removed = repo.remove_playlist_entries(session, playlist_id, index=index, track_ids=track_ids)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Titel nicht in der Playlist")
+    try:
+        await run_in_threadpool(navidrome.sync_playlist, playlist_id)
+    except Exception as exc:
+        logger.debug("Playlist-Sync nach Navidrome: {}", exc)
+    return {"ok": True}
+
+
 @router.delete("/playlist/{playlist_id}")
 async def remove_playlist(request: Request, playlist_id: int):
     _require_session(request)
@@ -1002,6 +1034,32 @@ async def add_navidrome_playlist_tracks(request: Request, playlist_id: str, payl
     song_ids = [str(item) for item in (payload.get("songIds") or []) if item]
     try:
         await run_in_threadpool(navidrome.add_songs_to_playlist, playlist_id, song_ids)
+    except NavidromeError as exc:
+        raise HTTPException(status_code=getattr(exc, "status_code", 502), detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/navidrome/playlist/{playlist_id}/remove-tracks")
+async def remove_navidrome_playlist_tracks(request: Request, playlist_id: str, payload: dict = Body(...)):
+    _require_session(request)
+    song_ids = [str(item) for item in (payload.get("songIds") or []) if item]
+    indexes = []
+    for item in payload.get("indexes") or []:
+        try:
+            indexes.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    if payload.get("index") is not None and str(payload.get("index")) != "":
+        try:
+            indexes.append(int(payload.get("index")))
+        except (TypeError, ValueError):
+            pass
+    try:
+        await run_in_threadpool(
+            lambda: navidrome.remove_songs_from_playlist(
+                playlist_id, indexes=indexes or None, song_ids=song_ids or None
+            )
+        )
     except NavidromeError as exc:
         raise HTTPException(status_code=getattr(exc, "status_code", 502), detail=str(exc)) from exc
     return {"ok": True}

@@ -342,6 +342,32 @@ def remove_playlist_indexes(session: Session, playlist_id: int, indexes: list[in
     replace_playlist_tracks(session, playlist_id, keep)
 
 
+def remove_playlist_entries(
+    session: Session,
+    playlist_id: int,
+    *,
+    index: int | None = None,
+    track_ids: list[str] | None = None,
+) -> int:
+    """Drop one occurrence: prefer the given index when it still matches."""
+    ids = playlist_track_ids(session, playlist_id)
+    wanted = [item for item in (track_ids or []) if item]
+    drop_at = None
+    if index is not None and 0 <= index < len(ids):
+        if not wanted or ids[index] in wanted:
+            drop_at = index
+    if drop_at is None and wanted:
+        for position, track_id in enumerate(ids):
+            if track_id in wanted:
+                drop_at = position
+                break
+    if drop_at is None:
+        return 0
+    keep = [track_id for position, track_id in enumerate(ids) if position != drop_at]
+    replace_playlist_tracks(session, playlist_id, keep)
+    return 1
+
+
 def delete_playlist(session: Session, playlist_id: int) -> None:
     playlist = session.get(Playlist, playlist_id)
     if playlist is not None:
