@@ -1,7 +1,7 @@
 """JSON API consumed by the built-in web player."""
 
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Body, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -164,6 +164,7 @@ def _set_session_cookie(response: Response, token: str, request: Request) -> Non
         web_session.COOKIE_NAME,
         token,
         max_age=web_session.MAX_AGE,
+        expires=datetime.now(timezone.utc) + timedelta(seconds=web_session.MAX_AGE),
         httponly=True,
         samesite="lax",
         path="/",
@@ -235,8 +236,14 @@ async def logout(response: Response):
 
 
 @router.get("/session")
-async def whoami(request: Request):
-    return _session_payload(getattr(request.state, "session_user", None))
+async def whoami(request: Request, response: Response):
+    user = getattr(request.state, "session_user", None)
+    payload = _session_payload(user)
+    if user:
+        token = web_session.issue(user)
+        _set_session_cookie(response, token, request)
+        payload["token"] = token
+    return payload
 
 
 @router.post("/account")
@@ -294,6 +301,24 @@ async def create_user(request: Request, payload: dict = Body(...)):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "user": user["username"]}
+
+
+@router.put("/users/{username}")
+async def update_user(request: Request, username: str, payload: dict = Body(...)):
+    _require_admin(request)
+    password = web_session.clean_secret(str(payload.get("password") or ""))
+    confirm = web_session.clean_secret(str(payload.get("passwordConfirm") or password))
+    if not password:
+        raise HTTPException(status_code=400, detail="Passwort fehlt")
+    if len(password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Passwort mindestens {MIN_PASSWORD_LENGTH} Zeichen")
+    if password != confirm:
+        raise HTTPException(status_code=400, detail="Passwörter stimmen nicht überein")
+    try:
+        auth_store.save_user(username, password=password)
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "user": username}
 
 
 @router.delete("/users/{username}")

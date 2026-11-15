@@ -15,7 +15,8 @@ from app.core import auth_store
 from app.core.settings import clean_secret, settings
 
 COOKIE_NAME = "music_play_session"
-MAX_AGE = 60 * 60 * 24 * 90
+# Browsers cap persistent cookies around 400 days; refresh on each app open.
+MAX_AGE = 60 * 60 * 24 * 400
 
 _serializer = URLSafeTimedSerializer(settings.session_secret, salt="music-play-session")
 
@@ -50,4 +51,7 @@ def read(request: Request) -> str | None:
         data = _serializer.loads(token, max_age=MAX_AGE)
     except Exception:
         return None
-    return data.get("u")
+    username = data.get("u")
+    if username and not auth_store.get_user(username):
+        return None
+    return username

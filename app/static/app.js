@@ -6,6 +6,89 @@
 
   const $ = (id) => document.getElementById(id);
   const TOKEN_KEY = "music_play_token";
+  const AUTH_DB = "music-play-auth";
+
+  function persistToken(token) {
+    if (!token) return;
+    try {
+      localStorage.setItem(TOKEN_KEY, token);
+    } catch (error) {
+      /* private mode */
+    }
+    try {
+      const request = indexedDB.open(AUTH_DB, 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("kv");
+      request.onsuccess = () => {
+        const tx = request.result.transaction("kv", "readwrite");
+        tx.objectStore("kv").put(token, "token");
+      };
+    } catch (error) {
+      /* ignore */
+    }
+  }
+
+  function clearToken() {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+    } catch (error) {
+      /* ignore */
+    }
+    try {
+      const request = indexedDB.open(AUTH_DB, 1);
+      request.onupgradeneeded = () => request.result.createObjectStore("kv");
+      request.onsuccess = () => {
+        const tx = request.result.transaction("kv", "readwrite");
+        tx.objectStore("kv").delete("token");
+      };
+    } catch (error) {
+      /* ignore */
+    }
+  }
+
+  function readStoredToken() {
+    try {
+      return localStorage.getItem(TOKEN_KEY);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function restoreTokenFromIdb() {
+    return new Promise((resolve) => {
+      if (readStoredToken()) {
+        resolve(readStoredToken());
+        return;
+      }
+      let finished = false;
+      const done = (value) => {
+        if (finished) return;
+        finished = true;
+        resolve(value || null);
+      };
+      try {
+        const request = indexedDB.open(AUTH_DB, 1);
+        request.onerror = () => done(null);
+        request.onupgradeneeded = () => request.result.createObjectStore("kv");
+        request.onsuccess = () => {
+          try {
+            const tx = request.result.transaction("kv", "readonly");
+            const get = tx.objectStore("kv").get("token");
+            get.onsuccess = () => {
+              const token = get.result;
+              if (token) persistToken(token);
+              done(token || null);
+            };
+            get.onerror = () => done(null);
+          } catch (error) {
+            done(null);
+          }
+        };
+      } catch (error) {
+        done(null);
+      }
+      setTimeout(() => done(readStoredToken()), 400);
+    });
+  }
 
   const state = {
     user: null,
@@ -36,19 +119,27 @@
 
   async function api(path, options = {}) {
     const headers = { "Content-Type": "application/json" };
-    const token = localStorage.getItem(TOKEN_KEY);
+    const token = readStoredToken();
     if (token) headers.Authorization = "Bearer " + token;
+    const retrying = Boolean(options._retried);
     const response = await fetch(path, {
       credentials: "include",
-      ...options,
       headers: { ...headers, ...(options.headers || {}) },
+      method: options.method,
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
     if (response.status === 401) {
-      localStorage.removeItem(TOKEN_KEY);
       const payload = await response.json().catch(() => ({}));
       const message = typeof payload.detail === "string" ? payload.detail : "Nicht angemeldet";
-      if (!path.startsWith("/api/login") && path !== "/api/session" && path !== "/api/login-hint" && path !== "/api/account") {
+      const skip = path.startsWith("/api/login") || path === "/api/session" || path === "/api/login-hint" || path === "/api/account";
+      if (!skip && !retrying) {
+        const retryToken = await restoreTokenFromIdb();
+        if (retryToken && retryToken !== token) {
+          return api(path, { ...options, _retried: true });
+        }
+      }
+      if (!skip) {
+        clearToken();
         showAuthScreen(message === "Zugang einrichten" ? "setup" : "login", message);
       }
       throw new Error(message);
@@ -57,7 +148,9 @@
       const detail = await response.json().catch(() => ({}));
       throw new Error(detail.detail || `Fehler ${response.status}`);
     }
-    return response.json();
+    const data = await response.json();
+    if (data && data.token) persistToken(data.token);
+    return data;
   }
 
   function formatTime(seconds) {
@@ -1823,7 +1916,7 @@
                     method: "POST",
                     body: { username, password, passwordConfirm },
                   });
-                  if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+                  if (data.token) persistToken(data.token);
                   toast(data.passwordRequired ? "Passwort gespeichert" : "Bitte ein Passwort eingeben");
                   render(state.route, true);
                 } catch (error) {
@@ -1861,7 +1954,7 @@
     const items = users || [];
     return configCard(
       "Benutzerverwaltung",
-      "Lege Konten an. Jeder Benutzer trägt danach selbst Navidrome- und Subsonic-Daten ein.",
+      "Konten anlegen, Passwort zurücksetzen, wenn jemand es vergessen hat. Navidrome-Daten setzt jeder selbst.",
       ICONS.users,
       [
         element(
@@ -1877,22 +1970,43 @@
                     : "Navidrome noch nicht eingerichtet",
                 }),
               ]),
-              user.username === state.user
-                ? element("span", { class: "muted", text: "du" })
-                : element("button", {
-                    class: "chip",
-                    text: "Löschen",
-                    onclick: async () => {
-                      if (!confirm(`Benutzer „${user.username}“ löschen?`)) return;
-                      try {
-                        await api(`/api/users/${encodeURIComponent(user.username)}`, { method: "DELETE" });
-                        toast("Benutzer gelöscht");
-                        render(state.route, true);
-                      } catch (error) {
-                        toast(error.message);
-                      }
-                    },
-                  }),
+              element("div", { class: "user-row-actions" }, [
+                element("button", {
+                  class: "chip",
+                  text: "Passwort",
+                  onclick: async () => {
+                    const password = prompt(`Neues Passwort für „${user.username}“ (mindestens 8 Zeichen)`);
+                    if (!password) return;
+                    const passwordConfirm = prompt("Passwort wiederholen");
+                    if (passwordConfirm == null) return;
+                    try {
+                      await api(`/api/users/${encodeURIComponent(user.username)}`, {
+                        method: "PUT",
+                        body: { password, passwordConfirm },
+                      });
+                      toast(`Passwort für „${user.username}“ gesetzt`);
+                    } catch (error) {
+                      toast(error.message);
+                    }
+                  },
+                }),
+                user.username === state.user
+                  ? element("span", { class: "muted", text: "du" })
+                  : element("button", {
+                      class: "chip",
+                      text: "Löschen",
+                      onclick: async () => {
+                        if (!confirm(`Benutzer „${user.username}“ löschen?`)) return;
+                        try {
+                          await api(`/api/users/${encodeURIComponent(user.username)}`, { method: "DELETE" });
+                          toast("Benutzer gelöscht");
+                          render(state.route, true);
+                        } catch (error) {
+                          toast(error.message);
+                        }
+                      },
+                    }),
+              ]),
             ])
           )
         ),
@@ -1959,7 +2073,7 @@
         ),
         moreRow("Abmelden", state.user || status.subsonicUser || "", ICONS.logout, async () => {
           await api("/api/logout", { method: "POST" });
-          localStorage.removeItem(TOKEN_KEY);
+          clearToken();
           location.reload();
         }),
       ])
@@ -3246,7 +3360,7 @@
             body: { ...payload, passwordConfirm: $("login-pass2").value },
           })
         : await api("/api/login", { method: "POST", body: payload });
-      if (data.token) localStorage.setItem(TOKEN_KEY, data.token);
+      if (data.token) persistToken(data.token);
       location.reload();
     } catch (error) {
       $("login-error").hidden = false;
@@ -3255,6 +3369,7 @@
   });
 
   async function boot() {
+    await restoreTokenFromIdb();
     const session = await api("/api/session").catch(() => ({ authenticated: false, user: null, passwordRequired: false }));
     state.passwordRequired = !!session.passwordRequired;
     state.user = session.user;
@@ -3298,14 +3413,13 @@
 
     state.route = { name: "home" };
     render(state.route);
+    setInterval(() => {
+      if (document.visibilityState === "visible") api("/api/session").catch(() => {});
+    }, 6 * 60 * 60 * 1000);
   }
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker
-      .getRegistrations()
-      .then((regs) => Promise.all(regs.map((reg) => reg.unregister())))
-      .then(() => navigator.serviceWorker.register("/sw.js"))
-      .catch(() => {});
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
   }
 
   boot().catch((error) => {
