@@ -7,8 +7,9 @@ without credentials in the URL.
 
 import hashlib
 import hmac
+from datetime import datetime, timedelta, timezone
 
-from fastapi import Request
+from fastapi import Request, Response
 from itsdangerous import URLSafeTimedSerializer
 
 from app.core import auth_store
@@ -68,3 +69,39 @@ def read(request: Request) -> str | None:
     if header.lower().startswith("bearer "):
         return _load(header.split(" ", 1)[1].strip())
     return None
+
+
+def request_is_https(request: Request) -> bool:
+    if request.url.scheme == "https":
+        return True
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if proto == "https":
+        return True
+    return "proto=https" in (request.headers.get("forwarded") or "").lower()
+
+
+def apply_cookie(response: Response, token: str, request: Request) -> None:
+    """HttpOnly session cookie. SameSite=None on HTTPS so the iPhone PWA keeps it."""
+    secure = request_is_https(request)
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        max_age=MAX_AGE,
+        expires=datetime.now(timezone.utc) + timedelta(seconds=MAX_AGE),
+        httponly=True,
+        samesite="none" if secure else "lax",
+        path="/",
+        secure=secure,
+    )
+
+
+def clear_cookie(response: Response) -> None:
+    for secure in (False, True):
+        for samesite in ("lax", "none"):
+            response.delete_cookie(
+                COOKIE_NAME,
+                path="/",
+                httponly=True,
+                samesite=samesite,
+                secure=secure,
+            )

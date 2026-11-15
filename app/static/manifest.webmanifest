@@ -3,7 +3,7 @@
   "short_name": "Music Play",
   "description": "YouTube Music im Browser - selbst gehostet auf Unraid",
   "id": "/",
-  "start_url": "/?source=pwa",
+  "start_url": "/app?v=1.10.4",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "browser"],

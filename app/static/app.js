@@ -152,36 +152,45 @@
     return raw || `Fehler ${status}`;
   }
 
+  function isAuthPath(path) {
+    const clean = (path || "").split("?")[0];
+    return /(?:login-hint|\/login|\/logout|\/auth\/hint|\/me|\/api\/session)$/.test(clean);
+  }
+
   async function api(path, options = {}) {
     const headers = { ...(options.headers || {}) };
     const token = readStoredToken();
-    const skipAuth = path.startsWith("/api/login") || path === "/api/login-hint" || path === "/api/logout";
+    const skipAuth = isAuthPath(path) && /login|logout|hint/.test(path);
     const method = options.method || "GET";
     const retrying = Boolean(options._retried);
-    const noAuthHeader = Boolean(options._noAuthHeader);
+    const useTokenHeader = Boolean(options._tokenHeader);
     if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-    // Do not send Authorization: Bearer — Nginx/Authelia/NPM treat it as proxy login and return 403.
-    if (token && !skipAuth && !noAuthHeader) headers["X-Music-Play-Token"] = token;
+    // Cookie first. Never send Authorization — proxies answer 403 Forbidden.
+    if (token && !skipAuth && useTokenHeader) headers["X-Music-Play-Token"] = token;
     const response = await fetch(path, {
       credentials: "include",
       headers,
       method,
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
-    if (response.status === 403 && !skipAuth && !retrying) {
-      return api(path, { ...options, _retried: true, _noAuthHeader: true });
+    if (response.status === 403 && !retrying && useTokenHeader) {
+      return api(path, { ...options, _retried: true, _tokenHeader: false });
+    }
+    if (response.status === 403) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(friendlyHttpError(403, errorDetail(payload, "Forbidden")));
     }
     if (response.status === 401) {
       const payload = await response.json().catch(() => ({}));
       const message = errorDetail(payload, "Nicht angemeldet");
-      const skip = path.startsWith("/api/login") || path === "/api/session" || path === "/api/login-hint" || path === "/api/account";
+      const skip = isAuthPath(path) || path === "/api/account";
+      if (!skip && !retrying && token && !useTokenHeader) {
+        return api(path, { ...options, _retried: true, _tokenHeader: true });
+      }
       if (!skip && !retrying) {
         const retryToken = await restoreTokenFromIdb();
         if (retryToken && retryToken !== token) {
-          return api(path, { ...options, _retried: true });
-        }
-        if (token && !noAuthHeader) {
-          return api(path, { ...options, _retried: true, _noAuthHeader: true });
+          return api(path, { ...options, _retried: true, _tokenHeader: true });
         }
       }
       if (!skip) {
@@ -470,9 +479,14 @@
     try {
       await view(route, forceReload);
     } catch (exception) {
+      const message = friendlyHttpError(0, exception.message);
+      if (/blockiert|forbidden|403/i.test(String(exception.message || "") + message)) {
+        showAuthScreen("login", message);
+        return;
+      }
       $("view").replaceChildren(
         element("div", { class: "empty" }, [
-          element("p", { text: friendlyHttpError(0, exception.message) }),
+          element("p", { text: message }),
           element("button", { class: "chip", text: "Erneut versuchen", onclick: () => render(route, true) }),
           element("button", { class: "chip", text: "Neu anmelden", onclick: () => signOut() }),
         ])
@@ -729,7 +743,7 @@
   async function renderHome() {
     setTitle("Start");
     loading();
-    const data = await api("/api/home");
+    const data = await api("/start").catch(() => api("/api/home"));
     if (!data.sections.length) {
       $("view").replaceChildren(
         pageHead(greeting(), "Für dich zusammengestellt"),
@@ -3635,7 +3649,7 @@
 
   async function signOut() {
     try {
-      await api("/api/logout", { method: "POST" });
+      await api("/auth/logout", { method: "POST" }).catch(() => api("/api/logout", { method: "POST" }));
     } catch (error) {
       /* still drop the local session */
     }
@@ -3698,7 +3712,9 @@
             method: "POST",
             body: { ...payload, passwordConfirm: $("login-pass2").value },
           })
-        : await api("/api/login", { method: "POST", body: payload });
+        : await api("/auth/login", { method: "POST", body: payload }).catch(() =>
+            api("/api/login", { method: "POST", body: payload })
+          );
       if (data.token) persistToken(data.token);
       await boot();
     } catch (error) {
@@ -3719,12 +3735,14 @@
     }
     await restoreTokenFromIdb();
     const failed = params.get("login") === "fail";
-    const session = await api("/api/session").catch(() => ({ authenticated: false, user: null, passwordRequired: false }));
+    const session = await api("/me")
+      .catch(() => api("/api/session"))
+      .catch(() => ({ authenticated: false, user: null, passwordRequired: false }));
     state.passwordRequired = !!session.passwordRequired;
     state.user = session.user;
     state.isAdmin = !!session.isAdmin;
     if (!session.authenticated) {
-      const hint = await api("/api/login-hint").catch(() => ({ username: "musicplay" }));
+      const hint = await api("/auth/hint").catch(() => api("/api/login-hint")).catch(() => ({ username: "musicplay" }));
       if ($("login-user") && !$("login-user").value) $("login-user").value = hint.username || "";
       showAuthScreen(
         session.passwordRequired ? "login" : "setup",
@@ -3767,13 +3785,17 @@
     render(state.route);
     if (!keepAlive) {
       keepAlive = setInterval(() => {
-        if (document.visibilityState === "visible") api("/api/session").catch(() => {});
+        if (document.visibilityState === "visible") api("/me").catch(() => api("/api/session")).catch(() => {});
       }, 6 * 60 * 60 * 1000);
     }
   }
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    const swUrl = "/sw.js?v=" + encodeURIComponent(document.body.dataset.version || "1");
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => Promise.all(regs.map((reg) => reg.unregister())))
+      .finally(() => navigator.serviceWorker.register(swUrl).catch(() => {}));
   }
 
   boot().catch((error) => {

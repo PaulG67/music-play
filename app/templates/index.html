@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>Music Play 1.10.3</title>
+  <title>Music Play 1.10.4</title>
 
   <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -16,9 +16,9 @@
   <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css?v={{ version }}">
 </head>
-<body>
-<section id="login" class="login"{% if authenticated %} hidden{% endif %}>
-  <form class="login-card" id="login-form" autocomplete="off" action="/api/login" method="post">
+<body data-version="{{ version }}">
+<section id="login" class="login">
+  <form class="login-card" id="login-form" autocomplete="off" action="/auth/login" method="post">
     <img src="/static/icons/icon.svg" alt="">
     <h1>Music Play</h1>
     <p id="login-lead">Melde dich mit deinem Music-Play-Konto an – nicht mit Unraid, Navidrome oder dem Proxy.</p>
@@ -30,7 +30,7 @@
   <input id="login-pass2" type="password" autocomplete="new-password" placeholder="Passwort wiederholen" hidden disabled>
 </section>
 
-<div id="app"{% if not authenticated %} hidden{% endif %}>
+<div id="app" hidden>
   <aside id="sidebar">
     <div class="brand">
       <img src="/static/icons/icon.svg" alt="">

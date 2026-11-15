@@ -1,7 +1,7 @@
 """JSON API consumed by the built-in web player."""
 
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 
 from fastapi import APIRouter, Body, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -161,37 +161,15 @@ async def login_hint():
 
 
 def _request_is_https(request: Request) -> bool:
-    if request.url.scheme == "https":
-        return True
-    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
-    if proto == "https":
-        return True
-    return "proto=https" in (request.headers.get("forwarded") or "").lower()
+    return web_session.request_is_https(request)
 
 
 def _set_session_cookie(response: Response, token: str, request: Request) -> None:
-    secure = _request_is_https(request)
-    response.set_cookie(
-        web_session.COOKIE_NAME,
-        token,
-        max_age=web_session.MAX_AGE,
-        expires=datetime.now(timezone.utc) + timedelta(seconds=web_session.MAX_AGE),
-        httponly=True,
-        samesite="lax",
-        path="/",
-        secure=secure,
-    )
+    web_session.apply_cookie(response, token, request)
 
 
 def _clear_session_cookie(response: Response) -> None:
-    for secure in (False, True):
-        response.delete_cookie(
-            web_session.COOKIE_NAME,
-            path="/",
-            httponly=True,
-            samesite="lax",
-            secure=secure,
-        )
+    web_session.clear_cookie(response)
 
 
 def _session_payload(user: str | None) -> dict:
@@ -1258,3 +1236,32 @@ async def cover(request: Request, u: str, size: int = 544):
     if not u.startswith("https://"):
         raise HTTPException(status_code=400, detail="Ungültige Cover-URL")
     return await media.fetch_cover(u, size)
+
+
+# Paths without `/api` so reverse proxies that 403 `/api/*` still allow login.
+alias_router = APIRouter()
+
+
+@alias_router.get("/me")
+async def alias_session(request: Request, response: Response):
+    return await whoami(request, response)
+
+
+@alias_router.get("/start")
+async def alias_home(request: Request):
+    return await home(request)
+
+
+@alias_router.get("/auth/hint")
+async def alias_hint():
+    return await login_hint()
+
+
+@alias_router.post("/auth/login")
+async def alias_login(request: Request):
+    return await login(request)
+
+
+@alias_router.post("/auth/logout")
+async def alias_logout(response: Response):
+    return await logout(response)

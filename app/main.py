@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.api import session as web_session
-from app.api.web import router as web_router
+from app.api.web import alias_router, router as web_router
 from app.core import auth_store
 from app.core.icons import ensure_icons
 from app.core.logging import logger
@@ -69,21 +69,31 @@ async def attach_session(request: Request, call_next):
 
 
 app.include_router(subsonic_router)
+app.include_router(alias_router)
 app.include_router(web_router)
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    return templates.TemplateResponse(
+def _render_app(request: Request):
+    response = templates.TemplateResponse(
         request=request,
         name="index.html",
         context={
             "version": APP_VERSION,
-            "authenticated": bool(request.state.session_user),
+            "authenticated": False,
             "password_required": auth_store.password_required(),
         },
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"},
     )
+    user = getattr(request.state, "session_user", None)
+    if user:
+        web_session.apply_cookie(response, web_session.issue(user), request)
+    return response
+
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/app", response_class=HTMLResponse)
+async def index(request: Request):
+    return _render_app(request)
 
 
 @app.get("/manifest.webmanifest")
