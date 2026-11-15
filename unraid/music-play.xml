@@ -48,6 +48,14 @@
           Description="Textdateien mit Fehlermeldungen, z. B. wenn Navidrome oder YouTube nicht erreichbar ist. Nur zur Fehlersuche nötig."
           Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/music-play/logs</Config>
 
+  <Config Name="Musik-Pfad" Target="/music" Default="/mnt/user/music" Mode="rw"
+          Description="Unraid-Pfad der Musikbibliothek. Denselben Share wie Navidrome wählen, z. B. /mnt/user/music. Wird im Container als /music eingehängt. Ohne diesen Pfad bleiben Downloads nur im Cache."
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/music</Config>
+
+  <Config Name="Musik-Pfad Variable" Target="NAVIDROME_MUSIC_HOST" Default="/mnt/user/music" Mode=""
+          Description="Derselbe Unraid-Pfad wie unter Musik-Pfad. Die App zeigt ihn unter Konfig an. Bei anderem Share denselben Wert eintragen."
+          Type="Variable" Display="always" Required="true" Mask="false">/mnt/user/music</Config>
+
   <Config Name="Admin-Benutzername" Target="SUBSONIC_USER" Default="musicplay" Mode=""
           Description="Login für den Administrator: Web-App und Amperfy (Subsonic). Wird beim Start automatisch auf das Admin-Konto übernommen. Weitere Benutzer legst du später in der App unter Mehr → Konfig an."
           Type="Variable" Display="always" Required="true" Mask="false">musicplay</Config>
@@ -123,14 +131,6 @@
   <Config Name="Navidrome-Passwort" Target="NAVIDROME_PASSWORD" Default="" Mode=""
           Description="Passwort zum Navidrome-Konto des Administrators. Wird verschlüsselt gespeichert und beim Start dem Admin zugeordnet. Leer = in der App unter Konfig eintragen."
           Type="Variable" Display="always" Required="false" Mask="true"></Config>
-
-  <Config Name="Musik-Pfad" Target="/music" Default="/mnt/user/music" Mode="rw"
-          Description="Unraid-Pfad der Musikbibliothek – denselben Share wie Navidrome wählen (z. B. /mnt/user/music oder /mnt/user/media/Musik). Wird im Container als /music eingehängt. Ohne diesen Pfad bleiben Downloads nur im Cache."
-          Type="Path" Display="always" Required="false" Mask="false">/mnt/user/music</Config>
-
-  <Config Name="Musik-Pfad Variable" Target="NAVIDROME_MUSIC_HOST" Default="/mnt/user/music" Mode=""
-          Description="Derselbe Unraid-Pfad wie unter Musik-Pfad, als Variable. Die App zeigt ihn unter Konfig an (Root = dieser Ordner). Bei anderem Share hier denselben Wert eintragen, z. B. /mnt/user/media/Musik."
-          Type="Variable" Display="always" Required="false" Mask="false">/mnt/user/music</Config>
 
   <Config Name="Navidrome-Importordner" Target="NAVIDROME_IMPORT_FOLDER" Default="YouTube" Mode=""
           Description="Unterordner für Imports, z. B. YouTube → /mnt/user/music/YouTube/…. Punkt oder Schrägstrich (. oder /) = direkt in die Musik-Root /mnt/user/music (Interpret/Album/…)."

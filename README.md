@@ -117,18 +117,24 @@ Navidrome-Alben und -Playlists erscheinen in *Bibliothek*, sobald die Verbindung
 Wie bei Zoraxy Guard: Vorlage einmalig auf den USB-Stick legen, danach erscheint die App
 unter **Docker → Container hinzufügen → Template**.
 
+Vorlage von GitHub auf den USB-Stick legen (bestehenden Container vorher entfernen,
+**Appdata nicht löschen**):
+
 ```bash
-cd /mnt/user/appdata
-git clone https://github.com/PaulG67/music-play.git
-bash /mnt/user/appdata/music-play/unraid/install-template.sh
+docker stop music-play; docker rm music-play
+mkdir -p /boot/config/plugins/dockerMan/templates-user
+wget -O /boot/config/plugins/dockerMan/templates-user/my-music-play.xml \
+  https://raw.githubusercontent.com/PaulG67/music-play/main/unraid/music-play.xml
 ```
 
 Dann in der Unraid-WebUI:
 
 1. **Docker → Container hinzufügen**
 2. Oben **Template** → **music-play** (User Templates)
-3. **Admin-Benutzername** und **Admin-Passwort** setzen (gelten automatisch für das Admin-Konto in der App und für Amperfy)
-4. **Apply**
+3. **Musik-Pfad** und **Musik-Pfad Variable** auf denselben Share setzen (Standard `/mnt/user/music`)
+4. **Config** muss `/mnt/user/appdata/music-play/config` bleiben (Logins, Playlists)
+5. **Admin-Benutzername** und **Admin-Passwort** setzen
+6. **Apply**
 
 WebUI: `http://<unraid-ip>:5080`
 
