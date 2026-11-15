@@ -124,13 +124,13 @@
           Description="Passwort zum Navidrome-Konto des Administrators. Wird verschlüsselt gespeichert und beim Start dem Admin zugeordnet. Leer = in der App unter Konfig eintragen."
           Type="Variable" Display="always" Required="false" Mask="true"></Config>
 
-  <Config Name="Musikbibliothek" Target="/music" Default="/mnt/user/music" Mode="rw"
-          Description="Denselben Ordner wie in Navidrome einhängen (meist /mnt/user/music). Nur so kann Music Play Titel nach Navidrome speichern. Ohne diesen Pfad bleiben Downloads nur im Cache."
+  <Config Name="Musik-Pfad" Target="/music" Default="/mnt/user/music" Mode="rw"
+          Description="Unraid-Pfad der Musikbibliothek – denselben Share wie Navidrome wählen (z. B. /mnt/user/music oder /mnt/user/media/Musik). Wird im Container als /music eingehängt. Ohne diesen Pfad bleiben Downloads nur im Cache."
           Type="Path" Display="always" Required="false" Mask="false">/mnt/user/music</Config>
 
-  <Config Name="Unraid-Musikpfad (Anzeige)" Target="NAVIDROME_MUSIC_HOST" Default="/mnt/user/music" Mode=""
-          Description="Derselbe Unraid-Pfad wie unter Musikbibliothek, nur damit die App anzeigen kann, wo die Dateien auf dem NAS liegen. Standard /mnt/user/music."
-          Type="Variable" Display="advanced" Required="false" Mask="false">/mnt/user/music</Config>
+  <Config Name="Musik-Pfad Variable" Target="NAVIDROME_MUSIC_HOST" Default="/mnt/user/music" Mode=""
+          Description="Derselbe Unraid-Pfad wie unter Musik-Pfad, als Variable. Die App zeigt ihn unter Konfig an (Root = dieser Ordner). Bei anderem Share hier denselben Wert eintragen, z. B. /mnt/user/media/Musik."
+          Type="Variable" Display="always" Required="false" Mask="false">/mnt/user/music</Config>
 
   <Config Name="Navidrome-Importordner" Target="NAVIDROME_IMPORT_FOLDER" Default="YouTube" Mode=""
           Description="Unterordner für Imports, z. B. YouTube → /mnt/user/music/YouTube/…. Punkt oder Schrägstrich (. oder /) = direkt in die Musik-Root /mnt/user/music (Interpret/Album/…)."
