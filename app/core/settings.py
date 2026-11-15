@@ -9,7 +9,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 APP_NAME = "Music Play"
-APP_VERSION = "1.9.3"
+APP_VERSION = "1.9.4"
 SUBSONIC_API_VERSION = "1.16.1"
 
 CONFIG_DIR = Path(os.getenv("CONFIG_DIR", "/config"))
@@ -22,7 +22,10 @@ load_dotenv(CONFIG_DIR / ".env")
 
 def clean_secret(value: str | None) -> str:
     """Normalize Unraid/env/browser secrets so visually equal values match."""
-    text = (value or "").replace("\x00", "").strip().lstrip("\ufeff")
+    text = (value or "").replace("\x00", "").replace("\xa0", " ")
+    for mark in ("\ufeff", "\u200b", "\u200c", "\u200d", "\u2060"):
+        text = text.replace(mark, "")
+    text = text.strip()
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
         text = text[1:-1].strip()
     return unicodedata.normalize("NFC", text)

@@ -159,7 +159,17 @@ async def login_hint():
     }
 
 
+def _request_is_https(request: Request) -> bool:
+    if request.url.scheme == "https":
+        return True
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if proto == "https":
+        return True
+    return "proto=https" in (request.headers.get("forwarded") or "").lower()
+
+
 def _set_session_cookie(response: Response, token: str, request: Request) -> None:
+    secure = _request_is_https(request)
     response.set_cookie(
         web_session.COOKIE_NAME,
         token,
@@ -168,7 +178,7 @@ def _set_session_cookie(response: Response, token: str, request: Request) -> Non
         httponly=True,
         samesite="lax",
         path="/",
-        secure=request.url.scheme == "https",
+        secure=secure,
     )
 
 
@@ -195,11 +205,16 @@ async def login(request: Request):
         payload = await request.json()
     else:
         form = await request.form()
-        payload = {"username": form.get("username"), "password": form.get("password")}
+        payload = {
+            "username": form.get("username") or form.get("mp_username"),
+            "password": form.get("password") or form.get("mp_password"),
+        }
 
     _throttle_login(request)
-    username = web_session.clean_secret(str(payload.get("username") or ""))
-    password = payload.get("password") or ""
+    username = web_session.clean_secret(
+        str(payload.get("username") or payload.get("mp_username") or "")
+    )
+    password = str(payload.get("password") or payload.get("mp_password") or "")
     if not auth_store.password_required():
         detail = "Zuerst unter Zugang ein Passwort setzen."
         if wants_json:

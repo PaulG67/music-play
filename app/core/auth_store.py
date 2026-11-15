@@ -209,22 +209,40 @@ def navidrome_credentials(username: str | None) -> dict:
     return dict(user.get("navidrome") or {"url": "", "username": "", "password": ""})
 
 
+def _passwords_equal(left: str, right: str) -> bool:
+    digest = hashlib.sha256
+    return hmac.compare_digest(
+        digest((left or "").encode("utf-8")).digest(),
+        digest((right or "").encode("utf-8")).digest(),
+    )
+
+
 def verify(username: str, password: str) -> bool:
     user = get_user(username)
     if not user:
         return False
-    cleaned = clean_secret(password)
+    candidates = []
+    for raw in (password, clean_secret(password)):
+        if raw not in candidates:
+            candidates.append(raw)
     hashed = user.get("password_hash") or ""
-    if hashed:
-        return secret_box.verify_password(cleaned, hashed)
     stored = user.get("password") or ""
-    if not stored:
+    matched = ""
+    for candidate in candidates:
+        if hashed and secret_box.verify_password(candidate, hashed):
+            matched = candidate
+            break
+        if stored and _passwords_equal(candidate, stored):
+            matched = candidate
+            break
+    if not matched:
         return False
-    digest = hashlib.sha256
-    ok = hmac.compare_digest(digest(cleaned.encode("utf-8")).digest(), digest(stored.encode("utf-8")).digest())
-    if ok:
-        save_user(user["username"], password=cleaned)
-    return ok
+    if matched != stored or (matched and not hashed) or (hashed and not secret_box.verify_password(matched, hashed)):
+        try:
+            save_user(user["username"], password=matched)
+        except (KeyError, ValueError, OSError):
+            pass
+    return True
 
 
 def save_user(

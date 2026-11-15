@@ -120,7 +120,8 @@
   async function api(path, options = {}) {
     const headers = { "Content-Type": "application/json" };
     const token = readStoredToken();
-    if (token) headers.Authorization = "Bearer " + token;
+    const skipAuth = path.startsWith("/api/login") || path === "/api/login-hint";
+    if (token && !skipAuth) headers.Authorization = "Bearer " + token;
     const retrying = Boolean(options._retried);
     const response = await fetch(path, {
       credentials: "include",
@@ -3343,15 +3344,28 @@
   function showAuthScreen(mode, message) {
     const setup = mode === "setup";
     const overlay = $("login");
+    const form = $("login-form");
+    const pass2 = $("login-pass2");
     if (!overlay) return;
     overlay.hidden = false;
     $("app").hidden = true;
     $("login-lead").textContent = setup
       ? "Lege den ersten Administrator an (mindestens 8 Zeichen). Danach kannst du unter Konfig weitere Benutzer hinzufügen."
-      : "Melde dich mit deinem Music-Play-Konto an.";
-    $("login-pass2").hidden = !setup;
+      : "Melde dich mit deinem Music-Play-Konto an – nicht mit Unraid, Navidrome oder dem Reverse-Proxy.";
     $("login-pass").autocomplete = setup ? "new-password" : "current-password";
     $("login-submit").textContent = setup ? "Zugang speichern" : "Anmelden";
+    if (pass2 && form) {
+      if (setup) {
+        pass2.hidden = false;
+        pass2.disabled = false;
+        form.insertBefore(pass2, $("login-error"));
+      } else {
+        pass2.hidden = true;
+        pass2.disabled = true;
+        pass2.value = "";
+        overlay.appendChild(pass2);
+      }
+    }
     if (message) {
       $("login-error").hidden = false;
       $("login-error").textContent = message;
@@ -3362,13 +3376,18 @@
 
   $("login-form")?.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const setup = !$("login-pass2").hidden;
+    const setup = $("login-pass2") && !$("login-pass2").hidden && !$("login-pass2").disabled;
     $("login-error").hidden = true;
+    const submit = $("login-submit");
+    if (submit) submit.disabled = true;
     try {
       const payload = {
         username: $("login-user").value.trim(),
         password: $("login-pass").value,
       };
+      if (!payload.username || !payload.password) {
+        throw new Error("Benutzername und Passwort eingeben.");
+      }
       if (setup && payload.password.length < 8) {
         throw new Error("Passwort mindestens 8 Zeichen");
       }
@@ -3379,15 +3398,20 @@
           })
         : await api("/api/login", { method: "POST", body: payload });
       if (data.token) persistToken(data.token);
-      location.reload();
+      await boot();
     } catch (error) {
       $("login-error").hidden = false;
       $("login-error").textContent = error.message;
+    } finally {
+      if (submit) submit.disabled = false;
     }
   });
 
+  let keepAlive = null;
+
   async function boot() {
     await restoreTokenFromIdb();
+    const failed = new URLSearchParams(location.search).get("login") === "fail";
     const session = await api("/api/session").catch(() => ({ authenticated: false, user: null, passwordRequired: false }));
     state.passwordRequired = !!session.passwordRequired;
     state.user = session.user;
@@ -3395,7 +3419,10 @@
     if (!session.authenticated) {
       const hint = await api("/api/login-hint").catch(() => ({ username: "musicplay" }));
       if ($("login-user") && !$("login-user").value) $("login-user").value = hint.username || "";
-      showAuthScreen(session.passwordRequired ? "login" : "setup");
+      showAuthScreen(
+        session.passwordRequired ? "login" : "setup",
+        failed ? "Benutzername oder Passwort falsch." : undefined
+      );
       return;
     }
     $("login").hidden = true;
@@ -3431,9 +3458,11 @@
 
     state.route = { name: "home" };
     render(state.route);
-    setInterval(() => {
-      if (document.visibilityState === "visible") api("/api/session").catch(() => {});
-    }, 6 * 60 * 60 * 1000);
+    if (!keepAlive) {
+      keepAlive = setInterval(() => {
+        if (document.visibilityState === "visible") api("/api/session").catch(() => {});
+      }, 6 * 60 * 60 * 1000);
+    }
   }
 
   if ("serviceWorker" in navigator) {

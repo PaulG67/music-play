@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>Music Play 1.9.3</title>
+  <title>Music Play 1.9.4</title>
 
   <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -18,16 +18,16 @@
 </head>
 <body>
 <section id="login" class="login"{% if authenticated %} hidden{% endif %}>
-  <form class="login-card" id="login-form">
+  <form class="login-card" id="login-form" autocomplete="off" action="/api/login" method="post">
     <img src="/static/icons/icon.svg" alt="">
     <h1>Music Play</h1>
-    <p id="login-lead">Melde dich an, um fortzufahren.</p>
-    <input id="login-user" type="text" name="username" autocomplete="username" placeholder="Benutzername">
-    <input id="login-pass" type="password" name="password" autocomplete="current-password" placeholder="Passwort">
-    <input id="login-pass2" type="password" name="passwordConfirm" autocomplete="new-password" placeholder="Passwort wiederholen" hidden>
+    <p id="login-lead">Melde dich mit deinem Music-Play-Konto an – nicht mit Unraid, Navidrome oder dem Proxy.</p>
+    <input id="login-user" type="text" name="mp_username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Benutzername">
+    <input id="login-pass" type="password" name="mp_password" autocomplete="current-password" placeholder="Passwort" enterkeyhint="go">
     <p id="login-error" class="login-error" hidden></p>
     <button type="submit" id="login-submit">Anmelden</button>
   </form>
+  <input id="login-pass2" type="password" autocomplete="new-password" placeholder="Passwort wiederholen" hidden disabled>
 </section>
 
 <div id="app"{% if not authenticated %} hidden{% endif %}>

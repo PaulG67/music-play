@@ -52,6 +52,9 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.middleware("http")
 async def attach_session(request: Request, call_next):
+    proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if proto in {"http", "https"}:
+        request.scope["scheme"] = proto
     request.state.session_user = web_session.read(request)
     token = nd_context.bind(auth_store.navidrome_credentials(request.state.session_user))
     try:

@@ -1104,6 +1104,7 @@ input[type="range"]::-moz-range-thumb {
   background: #000;
 }
 .login[hidden] { display: none !important; }
+.login > #login-pass2 { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; }
 .login-card {
   width: min(360px, 100%);
   text-align: center;

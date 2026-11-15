@@ -39,12 +39,7 @@ def issue(username: str) -> str:
     return _serializer.dumps({"u": username})
 
 
-def read(request: Request) -> str | None:
-    token = request.cookies.get(COOKIE_NAME)
-    if not token:
-        header = request.headers.get("Authorization") or ""
-        if header.lower().startswith("bearer "):
-            token = header.split(" ", 1)[1].strip()
+def _load(token: str | None) -> str | None:
     if not token:
         return None
     try:
@@ -55,3 +50,13 @@ def read(request: Request) -> str | None:
     if username and not auth_store.get_user(username):
         return None
     return username
+
+
+def read(request: Request) -> str | None:
+    user = _load(request.cookies.get(COOKIE_NAME))
+    if user:
+        return user
+    header = request.headers.get("Authorization") or ""
+    if header.lower().startswith("bearer "):
+        return _load(header.split(" ", 1)[1].strip())
+    return None
