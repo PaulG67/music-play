@@ -7,6 +7,7 @@ import re
 import subprocess
 import tempfile
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -128,70 +129,161 @@ def _guess_audio_path(track: dict) -> Path | None:
     return None
 
 
-def _candidate(url: str, source: str, label: str, *, original: bool = True) -> dict | None:
+def _candidate(url: str, source: str, label: str, *, original: bool = True, artist: str = "") -> dict | None:
     url = (url or "").strip()
     if not url or url.startswith("data:"):
         return None
     digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-    return {"id": digest, "url": url, "source": source, "label": label, "original": original}
+    return {"id": digest, "url": url, "source": source, "label": label, "original": original, "artist": artist}
 
 
-def _itunes_covers(artist: str, album: str) -> list[dict]:
-    query = " ".join(part for part in (artist, album) if part).strip()
-    if not query:
-        return []
-    try:
-        response = httpx.get(
-            "https://itunes.apple.com/search",
-            params={
-                "term": query,
-                "limit": 10,
-                "country": (settings.ytm_location or "DE")[:2].upper(),
-                "entity": "album",
-            },
-            headers=_HEADERS,
-            timeout=12.0,
-        )
-        response.raise_for_status()
-        rows = response.json().get("results") or []
-    except Exception as exc:
-        logger.warning("iTunes-Cover-Suche fehlgeschlagen: {}", exc)
-        return []
+def _norm(text: str) -> str:
+    folded = unicodedata.normalize("NFKD", text or "")
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch)).casefold()
+    return re.sub(r"[^a-z0-9]+", " ", folded).strip()
+
+
+def _tokens(text: str) -> list[str]:
+    stop = {
+        "the", "a", "an", "and", "feat", "ft", "official", "video", "audio", "lyric", "lyrics",
+        "single", "ep", "album", "deluxe", "remastered", "vol", "volume", "ost", "soundtrack",
+    }
+    return [token for token in _norm(text).split() if len(token) > 1 and token not in stop]
+
+
+def _artist_matches(expected: str, *got: str) -> bool:
+    want = _tokens(expected)
+    if not want:
+        return True
+    hay = set()
+    for value in got:
+        hay.update(_tokens(value))
+    hits = 0
+    for token in want:
+        if token in hay or any(token in other or other in token for other in hay if min(len(token), len(other)) >= 4):
+            hits += 1
+    return hits >= max(1, (len(want) + 1) // 2)
+
+
+def _itunes_art(url: str) -> str:
+    art = url or ""
+    for size in ("100x100bb", "60x60bb", "100x100", "60x60"):
+        art = art.replace(size, "1200x1200bb" if "bb" in size else "1200x1200")
+    return art
+
+
+def _itunes_covers(artist: str, album: str, title: str = "") -> list[dict]:
+    terms = []
+    for term in (f"{artist} {title}".strip(), f"{artist} {album}".strip(), artist):
+        if term and term not in terms:
+            terms.append(term)
+    countries = []
+    for country in ("US", (settings.ytm_location or "DE")[:2].upper(), "GB"):
+        if country and country not in countries:
+            countries.append(country)
     found = []
-    for row in rows:
-        art = str(row.get("artworkUrl100") or row.get("artworkUrl60") or "")
-        if not art:
-            continue
-        art = art.replace("100x100bb", "1200x1200bb").replace("60x60bb", "1200x1200bb")
-        art = art.replace("100x100", "1200x1200").replace("60x60", "1200x1200")
-        name = row.get("collectionName") or row.get("trackName") or album or "Album"
-        found.append(_candidate(art, "iTunes", name))
+    seen = set()
+    for entity in ("song", "album"):
+        for country in countries[:2]:
+            for term in terms[:2]:
+                try:
+                    response = httpx.get(
+                        "https://itunes.apple.com/search",
+                        params={"term": term, "limit": 12, "country": country, "entity": entity, "media": "music"},
+                        headers=_HEADERS,
+                        timeout=12.0,
+                    )
+                    response.raise_for_status()
+                    rows = response.json().get("results") or []
+                except Exception as exc:
+                    logger.warning("iTunes-Cover-Suche fehlgeschlagen: {}", exc)
+                    continue
+                for row in rows:
+                    who = str(row.get("artistName") or "")
+                    if not _artist_matches(artist, who, row.get("collectionName") or "", row.get("trackName") or ""):
+                        continue
+                    art = _itunes_art(str(row.get("artworkUrl100") or row.get("artworkUrl60") or ""))
+                    if not art or art in seen:
+                        continue
+                    seen.add(art)
+                    name = row.get("collectionName") or row.get("trackName") or album or title or "Cover"
+                    found.append(_candidate(art, "iTunes", f"{who} – {name}" if who else name, artist=who))
     return [item for item in found if item]
 
 
-def _deezer_covers(artist: str, album: str) -> list[dict]:
-    query = " ".join(part for part in (artist, album) if part).strip()
-    if not query:
-        return []
-    try:
-        response = httpx.get(
-            "https://api.deezer.com/search/album",
-            params={"q": query, "limit": 8},
-            headers=_HEADERS,
-            timeout=12.0,
-        )
-        response.raise_for_status()
-        rows = response.json().get("data") or []
-    except Exception as exc:
-        logger.warning("Deezer-Cover-Suche fehlgeschlagen: {}", exc)
+def _deezer_covers(artist: str, album: str, title: str = "") -> list[dict]:
+    queries = []
+    if artist and title:
+        queries.append(f'artist:"{artist}" track:"{title}"')
+        queries.append(f"{artist} {title}")
+    if artist and album and album.casefold() not in _PLACEHOLDER_ALBUMS:
+        queries.append(f'artist:"{artist}" album:"{album}"')
+        queries.append(f"{artist} {album}")
+    found = []
+    seen = set()
+    endpoints = (
+        ("https://api.deezer.com/search/track", "track"),
+        ("https://api.deezer.com/search/album", "album"),
+    )
+    for url, kind in endpoints:
+        for query in queries[:3]:
+            try:
+                response = httpx.get(url, params={"q": query, "limit": 8}, headers=_HEADERS, timeout=12.0)
+                response.raise_for_status()
+                rows = response.json().get("data") or []
+            except Exception as exc:
+                logger.warning("Deezer-Cover-Suche fehlgeschlagen: {}", exc)
+                continue
+            for row in rows:
+                if kind == "track":
+                    who = str((row.get("artist") or {}).get("name") or "")
+                    album_info = row.get("album") or {}
+                    art = str(album_info.get("cover_xl") or album_info.get("cover_big") or "")
+                    name = album_info.get("title") or row.get("title") or title
+                else:
+                    who = str((row.get("artist") or {}).get("name") or "")
+                    art = str(row.get("cover_xl") or row.get("cover_big") or "")
+                    name = row.get("title") or album
+                if not art or art in seen or not _artist_matches(artist, who, name):
+                    continue
+                seen.add(art)
+                found.append(_candidate(art, "Deezer", f"{who} – {name}" if who else name, artist=who))
+    return [item for item in found if item]
+
+
+def _audiodb_covers(artist: str, album: str, title: str) -> list[dict]:
+    if not artist:
         return []
     found = []
-    for row in rows:
-        art = str(row.get("cover_xl") or row.get("cover_big") or "")
-        if not art:
+    params_list = []
+    if album and album.casefold() not in _PLACEHOLDER_ALBUMS:
+        params_list.append({"s": artist, "a": album})
+    if title:
+        params_list.append({"s": artist, "a": title})
+    params_list.append({"s": artist})
+    for params in params_list[:2]:
+        try:
+            response = httpx.get(
+                "https://www.theaudiodb.com/api/v1/json/2/searchalbum.php",
+                params=params,
+                headers=_HEADERS,
+                timeout=12.0,
+            )
+            response.raise_for_status()
+            rows = response.json().get("album") or []
+        except Exception as exc:
+            logger.debug("TheAudioDB-Suche fehlgeschlagen: {}", exc)
             continue
-        name = row.get("title") or album or "Album"
-        found.append(_candidate(art, "Deezer", name))
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            who = str(row.get("strArtist") or "")
+            if not _artist_matches(artist, who):
+                continue
+            art = str(row.get("strAlbumThumbHQ") or row.get("strAlbumThumb") or "")
+            name = row.get("strAlbum") or album or title
+            if art:
+                found.append(_candidate(art, "TheAudioDB", f"{who} – {name}" if who else name, artist=who))
     return [item for item in found if item]
 
 
@@ -239,12 +331,14 @@ def _youtube_covers(track: dict) -> list[dict]:
             albums = []
         for album in albums:
             url = album.get("thumbnail")
-            if url:
+            who = album.get("artist") or ""
+            if url and _artist_matches(track.get("artist") or "", who, album.get("name") or album.get("title") or ""):
                 found.append(
                     _candidate(
                         mapper.upscale_thumbnail(url, 1200) or url,
                         "YouTube Music",
                         album.get("name") or album.get("title") or "Album",
+                        artist=who,
                     )
                 )
         try:
@@ -253,13 +347,15 @@ def _youtube_covers(track: dict) -> list[dict]:
             songs = []
         for song in songs:
             url = song.get("thumbnail")
-            if url:
+            who = song.get("artist") or ""
+            if url and _artist_matches(track.get("artist") or "", who, song.get("title") or ""):
                 found.append(
                     _candidate(
                         mapper.upscale_thumbnail(url, 1200) or url,
                         "YouTube Music",
                         song.get("title") or "Titel",
                         original=False,
+                        artist=who,
                     )
                 )
     found.extend(_youtube_frame_covers(_video_id(track)))
@@ -345,10 +441,10 @@ def _musicbrainz_covers(artist: str, album: str, title: str) -> list[dict]:
     if not artist_q:
         return []
     queries = []
-    if album_q and album_q.casefold() not in _PLACEHOLDER_ALBUMS:
-        queries.append(("release", f'release:"{album_q}" AND artist:"{artist_q}"'))
     if title_q:
         queries.append(("recording", f'recording:"{title_q}" AND artist:"{artist_q}"'))
+    if album_q and album_q.casefold() not in _PLACEHOLDER_ALBUMS:
+        queries.append(("release", f'release:"{album_q}" AND artist:"{artist_q}"'))
     if not queries:
         return []
     mbids: list[tuple[str, str]] = []
@@ -405,11 +501,12 @@ def search_covers(track: dict) -> dict:
     title = str(data.get("title") or "").strip()
     album_query = album if album.casefold() not in _PLACEHOLDER_ALBUMS else title
     items: list[dict] = []
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         jobs = [
             pool.submit(_musicbrainz_covers, artist, album_query, title),
-            pool.submit(_itunes_covers, artist, album_query),
-            pool.submit(_deezer_covers, artist, album_query),
+            pool.submit(_itunes_covers, artist, album_query, title),
+            pool.submit(_deezer_covers, artist, album_query, title),
+            pool.submit(_audiodb_covers, artist, album_query, title),
             pool.submit(_youtube_covers, data),
         ]
         for job in jobs:
@@ -419,8 +516,15 @@ def search_covers(track: dict) -> dict:
                 logger.warning("Cover-Quelle fehlgeschlagen: {}", exc)
     unique = []
     seen = set()
+    filtered = [
+        row
+        for row in items
+        if row and (not artist or _artist_matches(artist, row.get("artist") or "", row.get("label") or ""))
+    ]
+    if not filtered:
+        filtered = [row for row in items if row]
     for item in sorted(
-        [row for row in items if row],
+        filtered,
         key=lambda row: (not row.get("original", True), row.get("source") == "YouTube-Video"),
     ):
         key = item["url"].split("?")[0]
