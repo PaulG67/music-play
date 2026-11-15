@@ -33,16 +33,32 @@
     } catch (error) {
       /* ignore */
     }
-    try {
-      const request = indexedDB.open(AUTH_DB, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore("kv");
-      request.onsuccess = () => {
-        const tx = request.result.transaction("kv", "readwrite");
-        tx.objectStore("kv").delete("token");
+    return new Promise((resolve) => {
+      let finished = false;
+      const done = () => {
+        if (finished) return;
+        finished = true;
+        resolve();
       };
-    } catch (error) {
-      /* ignore */
-    }
+      try {
+        const request = indexedDB.open(AUTH_DB, 1);
+        request.onerror = () => done();
+        request.onupgradeneeded = () => request.result.createObjectStore("kv");
+        request.onsuccess = () => {
+          try {
+            const tx = request.result.transaction("kv", "readwrite");
+            tx.objectStore("kv").delete("token");
+            tx.oncomplete = () => done();
+            tx.onerror = () => done();
+          } catch (error) {
+            done();
+          }
+        };
+      } catch (error) {
+        done();
+      }
+      setTimeout(done, 400);
+    });
   }
 
   function readStoredToken() {
@@ -120,7 +136,7 @@
   async function api(path, options = {}) {
     const headers = { "Content-Type": "application/json" };
     const token = readStoredToken();
-    const skipAuth = path.startsWith("/api/login") || path === "/api/login-hint";
+    const skipAuth = path.startsWith("/api/login") || path === "/api/login-hint" || path === "/api/logout";
     if (token && !skipAuth) headers.Authorization = "Bearer " + token;
     const retrying = Boolean(options._retried);
     const response = await fetch(path, {
@@ -381,6 +397,7 @@
   });
 
   $("reload-button").addEventListener("click", () => state.route && render(state.route, true));
+  $("logout-button")?.addEventListener("click", () => signOut());
   $("sidebar-playlists-open")?.addEventListener("click", () => {
     state.stack = [];
     state.route = { name: "playlists" };
@@ -1644,8 +1661,8 @@
     users: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm-7 9v-1.2A5.8 5.8 0 0 1 10.8 14h2.4A5.8 5.8 0 0 1 19 19.8V21H5zm14.5-9a3.5 3.5 0 1 0-3.2-4.9 5.9 5.9 0 0 1 0 3.8A3.5 3.5 0 0 0 19.5 12zM16 21v-1.2a7.6 7.6 0 0 0-1.1-3.8H18a4.6 4.6 0 0 1 4 2.4V21h-6z"/></svg>',
   };
 
-  function moreRow(title, meta, icon, onclick) {
-    return element("button", { class: "more-row", onclick }, [
+  function moreRow(title, meta, icon, onclick, extraClass) {
+    return element("button", { class: extraClass ? `more-row ${extraClass}` : "more-row", onclick }, [
       element("span", { class: "more-row-icon", html: icon }),
       element("span", { class: "more-row-text" }, [
         element("strong", { text: title }),
@@ -1917,6 +1934,11 @@
           }),
           element("div", { class: "row-buttons" }, [
             element("button", {
+              class: "chip",
+              text: "Abmelden",
+              onclick: () => signOut(),
+            }),
+            element("button", {
               class: "chip solid",
               text: "Speichern",
               onclick: async () => {
@@ -2091,11 +2113,13 @@
           ICONS.info,
           () => navigate({ name: "config" })
         ),
-        moreRow("Abmelden", state.user || status.subsonicUser || "", ICONS.logout, async () => {
-          await api("/api/logout", { method: "POST" });
-          clearToken();
-          location.reload();
-        }),
+        moreRow(
+          "Abmelden",
+          state.user ? `Angemeldet als ${state.user}` : "Sitzung beenden und Login testen",
+          ICONS.logout,
+          () => signOut(),
+          "more-row-danger"
+        ),
       ])
     );
   }
@@ -3393,6 +3417,16 @@
     toast("Offline – gespeicherte Titel bleiben abspielbar");
   });
 
+  async function signOut() {
+    try {
+      await api("/api/logout", { method: "POST" });
+    } catch (error) {
+      /* still drop the local session */
+    }
+    await clearToken();
+    location.replace("/?loggedout=1");
+  }
+
   function showAuthScreen(mode, message) {
     const setup = mode === "setup";
     const overlay = $("login");
@@ -3462,8 +3496,13 @@
   let keepAlive = null;
 
   async function boot() {
+    const params = new URLSearchParams(location.search);
+    if (params.has("loggedout")) {
+      await clearToken();
+      history.replaceState({}, "", "/");
+    }
     await restoreTokenFromIdb();
-    const failed = new URLSearchParams(location.search).get("login") === "fail";
+    const failed = params.get("login") === "fail";
     const session = await api("/api/session").catch(() => ({ authenticated: false, user: null, passwordRequired: false }));
     state.passwordRequired = !!session.passwordRequired;
     state.user = session.user;

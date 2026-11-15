@@ -182,6 +182,17 @@ def _set_session_cookie(response: Response, token: str, request: Request) -> Non
     )
 
 
+def _clear_session_cookie(response: Response) -> None:
+    for secure in (False, True):
+        response.delete_cookie(
+            web_session.COOKIE_NAME,
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=secure,
+        )
+
+
 def _session_payload(user: str | None) -> dict:
     required = auth_store.password_required()
     record = auth_store.get_user(user) if user else None
@@ -246,7 +257,7 @@ async def login(request: Request):
 
 @router.post("/logout")
 async def logout(response: Response):
-    response.delete_cookie(web_session.COOKIE_NAME, path="/")
+    _clear_session_cookie(response)
     return {"ok": True}
 
 

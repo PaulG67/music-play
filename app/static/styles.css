@@ -1196,6 +1196,14 @@ input[type="range"]::-moz-range-thumb {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.more-row-danger {
+  background: rgba(255, 107, 107, 0.08);
+}
+.more-row-danger .more-row-icon {
+  background: rgba(255, 107, 107, 0.16);
+  color: #ff8a8a;
+}
+.more-row-danger strong { color: #ff8a8a; }
 .more-chevron {
   color: var(--text-dim);
   font-size: 28px;
