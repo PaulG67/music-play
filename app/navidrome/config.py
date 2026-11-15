@@ -2,6 +2,7 @@
 
 Env vars are the defaults. Saving under Mehr overwrites them so the Unraid
 template does not have to be recreated after the first setup.
+Passwords are encrypted on disk.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import os
 import threading
 from pathlib import Path
 
+from app.core import secret_box
 from app.core.settings import CONFIG_DIR, clean_secret, settings
 
 CONFIG_FILE = CONFIG_DIR / "navidrome.json"
@@ -28,12 +30,24 @@ def _defaults() -> dict:
     }
 
 
+def _write_unlocked(data: dict) -> None:
+    payload = {
+        "url": data.get("url") or "",
+        "username": data.get("username") or "",
+        "password": secret_box.seal(data.get("password") or ""),
+        "music_dir": data.get("music_dir") or "/music",
+        "import_folder": data.get("import_folder") or "YouTube",
+    }
+    secret_box.write_private_file(CONFIG_FILE, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
 def _read_unlocked() -> dict:
     global _cache
     if _cache is not None:
         return dict(_cache)
 
     data = _defaults()
+    migrate = False
     if CONFIG_FILE.exists():
         try:
             loaded = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
@@ -43,12 +57,22 @@ def _read_unlocked() -> dict:
                 if loaded.get("username") is not None:
                     data["username"] = clean_secret(str(loaded.get("username") or ""))
                 if loaded.get("password") is not None:
-                    data["password"] = clean_secret(str(loaded.get("password") or ""))
+                    stored = str(loaded.get("password") or "")
+                    data["password"] = secret_box.unseal(stored)
+                    migrate = secret_box.needs_migration(stored)
                 if loaded.get("music_dir") is not None:
                     data["music_dir"] = clean_secret(str(loaded.get("music_dir") or data["music_dir"])) or data["music_dir"]
                 if loaded.get("import_folder") is not None:
                     data["import_folder"] = clean_secret(str(loaded.get("import_folder") or data["import_folder"])) or data["import_folder"]
         except (OSError, json.JSONDecodeError, TypeError):
+            pass
+    elif data.get("password"):
+        migrate = True
+
+    if migrate:
+        try:
+            _write_unlocked(data)
+        except OSError:
             pass
 
     _cache = dict(data)
@@ -74,7 +98,7 @@ def save(payload: dict) -> dict:
         "import_folder": clean_secret(str(payload.get("import_folder") or current.get("import_folder") or "YouTube")) or "YouTube",
     }
     with _lock:
-        CONFIG_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        _write_unlocked(data)
         _cache = dict(data)
     return dict(data)
 

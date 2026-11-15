@@ -11,8 +11,9 @@ import hmac
 from fastapi import Request
 from itsdangerous import URLSafeTimedSerializer
 
+from app.core import secret_box
 from app.core.auth_store import password as stored_password
-from app.core.auth_store import password_required
+from app.core.auth_store import password_hash, password_required
 from app.core.settings import clean_secret, settings
 
 COOKIE_NAME = "music_play_session"
@@ -32,7 +33,16 @@ def secrets_equal(left: str | None, right: str | None) -> bool:
 def check_password(password: str) -> bool:
     if not password_required():
         return True
-    return secrets_equal(clean_secret(password), stored_password())
+    cleaned = clean_secret(password)
+    hashed = password_hash()
+    if hashed:
+        return secret_box.verify_password(cleaned, hashed)
+    ok = secrets_equal(cleaned, stored_password())
+    if ok and stored_password():
+        from app.core import auth_store
+
+        auth_store.save(auth_store.username(), stored_password())
+    return ok
 
 
 def issue(username: str) -> str:

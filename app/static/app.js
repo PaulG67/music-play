@@ -1749,7 +1749,7 @@
         element("h2", { text: "Zugang" }),
         element("p", {
           class: "muted",
-          text: "Anmeldung in der App. Dieselben Daten gelten für Amperfy. Die Authentisierung am Proxy kannst du danach abschalten.",
+          text: "Anmeldung in der App. Dieselben Daten gelten für Amperfy. Passwörter liegen verschlüsselt im Config-Ordner. Die Authentisierung am Proxy kannst du danach abschalten.",
         }),
         element("div", { class: "settings-form" }, [
           element("input", {
@@ -1781,6 +1781,10 @@
                 const passwordConfirm = $("acct-pass2").value;
                 if (!password) {
                   toast("Passwort eingeben");
+                  return;
+                }
+                if (password.length < 8) {
+                  toast("Passwort mindestens 8 Zeichen");
                   return;
                 }
                 try {
@@ -3074,7 +3078,7 @@
     overlay.hidden = false;
     $("app").hidden = true;
     $("login-lead").textContent = setup
-      ? "Lege Benutzername und Passwort fest. Danach kannst du die Anmeldung am Proxy abschalten."
+      ? "Lege Benutzername und ein Passwort (mindestens 8 Zeichen) fest. Danach kannst du die Anmeldung am Proxy abschalten. Passwörter werden verschlüsselt gespeichert."
       : "Melde dich an, um Music Play zu nutzen.";
     $("login-pass2").hidden = !setup;
     $("login-pass").autocomplete = setup ? "new-password" : "current-password";
@@ -3096,6 +3100,9 @@
         username: $("login-user").value.trim(),
         password: $("login-pass").value,
       };
+      if (setup && payload.password.length < 8) {
+        throw new Error("Passwort mindestens 8 Zeichen");
+      }
       const data = setup
         ? await api("/api/account", {
             method: "POST",

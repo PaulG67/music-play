@@ -1,5 +1,6 @@
 """JSON API consumed by the built-in web player."""
 
+import time
 from datetime import date, datetime
 
 from fastapi import APIRouter, Body, HTTPException, Request, Response
@@ -9,6 +10,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from app.api import session as web_session
 from app.core import auth_store
 from app.core.logging import logger
+from app.core.secret_box import MIN_PASSWORD_LENGTH
 from app.core.settings import APP_VERSION, settings
 from app.db import repo
 from app.db.database import session_scope
@@ -27,6 +29,33 @@ from app.ytm import client as ytm
 from app.ytm import streams
 
 router = APIRouter(prefix="/api")
+
+_login_attempts: dict[str, list[float]] = {}
+
+
+def _peer(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
+
+
+def _throttle_login(request: Request) -> None:
+    now = time.monotonic()
+    ip = _peer(request)
+    recent = [stamp for stamp in _login_attempts.get(ip, []) if now - stamp < 900]
+    _login_attempts[ip] = recent
+    if len(recent) >= 8:
+        raise HTTPException(status_code=429, detail="Zu viele Anmeldeversuche. Warte ein paar Minuten.")
+
+
+def _note_login_failure(request: Request) -> None:
+    ip = _peer(request)
+    _login_attempts.setdefault(ip, []).append(time.monotonic())
+
+
+def _clear_login_failures(request: Request) -> None:
+    _login_attempts.pop(_peer(request), None)
 
 
 def _require_session(request: Request) -> str:
@@ -119,7 +148,6 @@ async def login_hint():
     return {
         "username": auth_store.username(),
         "passwordRequired": required,
-        "passwordLength": len(auth_store.password()) if required else 0,
         "version": APP_VERSION,
     }
 
@@ -159,27 +187,23 @@ async def login(request: Request):
         form = await request.form()
         payload = {"username": form.get("username"), "password": form.get("password")}
 
+    _throttle_login(request)
     username = web_session.clean_secret(str(payload.get("username") or "")) or auth_store.username()
     password = payload.get("password") or ""
-    entered = web_session.clean_secret(password)
-    expected = auth_store.password()
     if not auth_store.password_required():
         detail = "Zuerst unter Zugang ein Passwort setzen."
         if wants_json:
             raise HTTPException(status_code=401, detail=detail)
         return RedirectResponse("/?login=fail", status_code=303)
     if not web_session.secrets_equal(username, auth_store.username()) or not web_session.check_password(password):
-        logger.warning(
-            "Login fehlgeschlagen: Benutzer {}, Eingabe {} Zeichen, konfiguriert {} Zeichen",
-            username,
-            len(entered),
-            len(expected),
-        )
+        _note_login_failure(request)
+        logger.warning("Login fehlgeschlagen")
         detail = "Benutzername oder Passwort falsch."
         if wants_json:
             raise HTTPException(status_code=401, detail=detail)
         return RedirectResponse("/?login=fail", status_code=303)
 
+    _clear_login_failures(request)
     token = web_session.issue(auth_store.username())
     logger.info("Web-Login erfolgreich")
     if wants_json:
@@ -218,6 +242,8 @@ async def save_account(request: Request, response: Response, payload: dict = Bod
     confirm = web_session.clean_secret(str(payload.get("passwordConfirm") or new_password))
     if not new_password:
         raise HTTPException(status_code=400, detail="Passwort darf nicht leer sein")
+    if len(new_password) < MIN_PASSWORD_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Passwort mindestens {MIN_PASSWORD_LENGTH} Zeichen")
     if new_password != confirm:
         raise HTTPException(status_code=400, detail="Passwörter stimmen nicht überein")
 

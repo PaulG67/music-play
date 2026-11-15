@@ -9,7 +9,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 APP_NAME = "Music Play"
-APP_VERSION = "1.7.0"
+APP_VERSION = "1.8.0"
 SUBSONIC_API_VERSION = "1.16.1"
 
 CONFIG_DIR = Path(os.getenv("CONFIG_DIR", "/config"))
@@ -52,10 +52,18 @@ def _session_secret() -> str:
 
     secret_file = CONFIG_DIR / "session.secret"
     if secret_file.exists():
+        try:
+            os.chmod(secret_file, 0o600)
+        except OSError:
+            pass
         return secret_file.read_text(encoding="utf-8").strip()
 
     generated = secrets.token_urlsafe(48)
     secret_file.write_text(generated, encoding="utf-8")
+    try:
+        os.chmod(secret_file, 0o600)
+    except OSError:
+        pass
     return generated
 
 
