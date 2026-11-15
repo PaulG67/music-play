@@ -160,11 +160,12 @@
     document.title = title === "Start" ? "Music Play" : `${title} · Music Play`;
   }
 
-  const NAV_ROUTES = ["home", "search", "playlists", "explore", "library", "settings"];
+  const NAV_ROUTES = ["home", "search", "playlists", "explore", "library", "settings", "config"];
 
   function setActiveNav(routeName) {
     const playlistRoutes = ["playlists", "playlist", "nplaylist", "ytplaylist", "liked"];
-    const mapped = playlistRoutes.includes(routeName) ? "playlists" : routeName;
+    let mapped = playlistRoutes.includes(routeName) ? "playlists" : routeName;
+    if (mapped === "config" && window.matchMedia("(max-width: 899px)").matches) mapped = "settings";
     const top = NAV_ROUTES.includes(mapped)
       ? mapped
       : state.stack.find((item) => NAV_ROUTES.includes(item.name))?.name;
@@ -308,6 +309,7 @@
     playlists: renderPlaylistsHub,
     liked: renderLiked,
     settings: renderSettings,
+    config: renderConfig,
     album: (route) => renderAlbum(route.id),
     artist: (route) => renderArtist(route.id),
     playlist: (route) => renderPlaylist(route.id),
@@ -1208,7 +1210,7 @@
             class: "empty",
             text:
               navidromeLibrary.error ||
-              "In Navidrome sind keine Playlists sichtbar. Unter Mehr die Verbindung testen.",
+              "In Navidrome sind keine Playlists sichtbar. Unter Konfig die Verbindung testen.",
           })
         );
         return;
@@ -1533,6 +1535,53 @@
     );
   }
 
+  const ICONS = {
+    gear: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.1 12.6a7.4 7.4 0 0 0 .1-1.2 7.4 7.4 0 0 0-.1-1.2l2-1.6-1.9-3.3-2.4 1a7.5 7.5 0 0 0-2.1-1.2L13.2 2h-3.8L9 3.1a7.5 7.5 0 0 0-2.1 1.2l-2.4-1-1.9 3.3 2 1.6a7.4 7.4 0 0 0-.1 1.2 7.4 7.4 0 0 0 .1 1.2l-2 1.6 1.9 3.3 2.4-1a7.5 7.5 0 0 0 2.1 1.2l.4 2.6h3.8l.5-2.6a7.5 7.5 0 0 0 2.1-1.2l2.4 1 1.9-3.3-2-1.6zM11.3 15a3 3 0 1 1 0-6 3 3 0 0 1 0 6z"/></svg>',
+    lock: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 9h-1V7a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2zm-7-2a2 2 0 1 1 4 0v2h-4V7zm7 13H7v-9h10v9z"/></svg>',
+    disc: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2zm0 14.5A4.5 4.5 0 1 1 16.5 12 4.5 4.5 0 0 1 12 16.5zm0-6A1.5 1.5 0 1 0 13.5 12 1.5 1.5 0 0 0 12 10.5z"/></svg>',
+    sync: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6V2L7 7l5 5V8a4 4 0 1 1-4 4H6a6 6 0 1 0 6-6z"/></svg>',
+    phone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 2H8a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-4 19a1.2 1.2 0 1 1 0-2.4A1.2 1.2 0 0 1 12 21z"/></svg>',
+    eq: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 20h2V10H6v10zm5 0h2V4h-2v16zm5 0h2v-7h-2v7z"/></svg>',
+    info: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a10 10 0 1 0 .001 20.001A10 10 0 0 0 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>',
+    logout: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17v-3h4v-4h-4V7l-5 5 5 5zm9-14H5a2 2 0 0 0-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/></svg>',
+    sleep: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a8 8 0 1 0 8 8h-2a6 6 0 1 1-6-6V4zm7.6.7-1.4 1.4 1.8 1.8 1.4-1.4L19.6 4.7zM12 2h2v3h-2V2z"/></svg>',
+  };
+
+  function moreRow(title, meta, icon, onclick) {
+    return element("button", { class: "more-row", onclick }, [
+      element("span", { class: "more-row-icon", html: icon }),
+      element("span", { class: "more-row-text" }, [
+        element("strong", { text: title }),
+        meta ? element("span", { text: meta }) : null,
+      ]),
+      element("span", { class: "more-chevron", text: "›" }),
+    ]);
+  }
+
+  function configCard(title, hint, icon, children) {
+    return element("section", { class: "config-card" }, [
+      element("div", { class: "config-card-head" }, [
+        element("span", { class: "config-card-icon", html: icon }),
+        element("div", { class: "config-card-titles" }, [
+          element("h2", { text: title }),
+          hint ? element("p", { class: "muted", text: hint }) : null,
+        ]),
+      ]),
+      ...[].concat(children),
+    ]);
+  }
+
+  function labeledInput(id, label, attrs) {
+    return element("div", { class: "field" }, [
+      element("label", { for: id, text: label }),
+      element("input", { id, ...attrs }),
+    ]);
+  }
+
+  function connectionPill(ok, label) {
+    return element("span", { class: `config-pill ${ok ? "ok" : "off"}`, text: label });
+  }
+
   function navidromeStatusBox(nd) {
     const reachable = Boolean(nd.reachable);
     const configured = Boolean(nd.configured);
@@ -1572,32 +1621,28 @@
       };
     }
 
-    return element("div", { class: "section" }, [
-      element("h2", { text: "Navidrome" }),
-      element("p", {
-        class: "muted",
-        text: "Suche und Vorschläge kommen von YouTube Music. Vorhandene Titel und Playlists kommen aus Navidrome.",
-      }),
+    return configCard(
+      "Navidrome",
+      "Suche und Vorschläge kommen von YouTube Music. Vorhandene Titel und Playlists kommen aus Navidrome.",
+      ICONS.disc,
+      [
       navidromeStatusBox(nd),
       element("div", { class: "settings-form" }, [
-        element("input", {
+        labeledInput("nd-url", "Server-URL", {
           type: "url",
-          id: "nd-url",
           value: nd.url || "",
           placeholder: "http://192.168.0.188:4533",
           autocomplete: "off",
         }),
-        element("input", {
+        labeledInput("nd-user", "Benutzer", {
           type: "text",
-          id: "nd-user",
           value: nd.username || "",
           placeholder: "Navidrome-Benutzer",
           autocomplete: "username",
         }),
-        element("input", {
+        labeledInput("nd-pass", "Passwort", {
           type: "password",
-          id: "nd-pass",
-          placeholder: nd.passwordSet ? "Passwort unverändert lassen" : "Navidrome-Passwort",
+          placeholder: nd.passwordSet ? "Unverändert lassen" : "Navidrome-Passwort",
           autocomplete: "new-password",
         }),
         element("div", { class: "field" }, [
@@ -1673,41 +1718,38 @@
           }),
         ]),
       ]),
-    ]);
+    ]
+    );
   }
 
   function mediasyncSettings(status) {
     const ms = status.mediasync || {};
     state.mediasync = ms;
-    return element("div", { class: "section" }, [
-      element("h2", { text: "MediaSync" }),
-      element("p", {
-        class: "muted",
-        text: ms.configured
-          ? ms.reachable
-            ? "Beim Download wählst du eine bestehende Playlist. MediaSync sucht den Titel, lädt ihn und legt ihn in der Bibliothek ab."
-            : "Gespeichert, aber MediaSync antwortet nicht. URL prüfen – im LAN z.B. http://192.168.0.188:PORT."
-          : "URL deiner MediaSync-App auf Unraid. Optional Benutzer/Passwort, falls MediaSync Anmeldung verlangt.",
-      }),
+    return configCard(
+      "MediaSync",
+      ms.configured
+        ? ms.reachable
+          ? "Beim Download wählst du eine bestehende Playlist. MediaSync sucht den Titel und legt ihn in der Bibliothek ab."
+          : "Gespeichert, aber MediaSync antwortet nicht. URL prüfen – im LAN z. B. http://192.168.0.188:PORT."
+        : "URL deiner MediaSync-App auf Unraid. Benutzer und Passwort nur, falls MediaSync Anmeldung verlangt.",
+      ICONS.sync,
+      [
       element("div", { class: "settings-form" }, [
-        element("input", {
+        labeledInput("ms-url", "Server-URL", {
           type: "url",
-          id: "ms-url",
           value: ms.url || "",
           placeholder: "http://192.168.0.188:8090",
           autocomplete: "off",
         }),
-        element("input", {
+        labeledInput("ms-user", "Benutzer (optional)", {
           type: "text",
-          id: "ms-user",
           value: ms.username || "",
-          placeholder: "Benutzer (optional)",
+          placeholder: "Benutzer",
           autocomplete: "username",
         }),
-        element("input", {
+        labeledInput("ms-pass", "Passwort (optional)", {
           type: "password",
-          id: "ms-pass",
-          placeholder: ms.passwordSet ? "Passwort unverändert lassen" : "Passwort (optional)",
+          placeholder: ms.passwordSet ? "Unverändert lassen" : "Passwort",
           autocomplete: "new-password",
         }),
         element("button", {
@@ -1735,39 +1777,26 @@
     ]);
   }
 
-  async function renderSettings() {
-    setTitle("Mehr");
-    loading();
-    const status = await api("/api/status");
-    status.cache = status.cache || { tracks: 0, bytes: 0 };
-    state.status = status;
-    const usage = await Offline.usage();
-
-    $("view").replaceChildren(
-      pageHead("Einstellungen"),
-      element("div", { class: "section" }, [
-        element("h2", { text: "Zugang" }),
-        element("p", {
-          class: "muted",
-          text: "Anmeldung in der App. Dieselben Daten gelten für Amperfy. Passwörter liegen verschlüsselt im Config-Ordner. Die Authentisierung am Proxy kannst du danach abschalten.",
-        }),
+  function accountSettings(status) {
+    return configCard(
+      "Zugang",
+      "Anmeldung in der App. Dieselben Daten gelten für Amperfy. Passwörter liegen verschlüsselt im Config-Ordner.",
+      ICONS.lock,
+      [
         element("div", { class: "settings-form" }, [
-          element("input", {
+          labeledInput("acct-user", "Benutzername", {
             type: "text",
-            id: "acct-user",
             value: status.subsonicUser || "musicplay",
             autocomplete: "username",
             placeholder: "Benutzername für Amperfy",
           }),
-          element("input", {
+          labeledInput("acct-pass", "Passwort", {
             type: "password",
-            id: "acct-pass",
             autocomplete: "new-password",
-            placeholder: status.passwordRequired ? "Neues Passwort" : "Passwort",
+            placeholder: status.passwordRequired ? "Neues Passwort" : "Mindestens 8 Zeichen",
           }),
-          element("input", {
+          labeledInput("acct-pass2", "Passwort wiederholen", {
             type: "password",
-            id: "acct-pass2",
             autocomplete: "new-password",
             placeholder: "Passwort wiederholen",
           }),
@@ -1802,22 +1831,16 @@
             }),
           ]),
         ]),
-      ]),
+      ]
+    );
+  }
 
-      navidromeSettings(status),
-
-      mediasyncSettings(status),
-
-      element("div", { class: "section" }, [
-        element("h2", { text: "Wiedergabe" }),
-        element("div", { class: "chips" }, [
-          element("button", { class: "chip", text: "Equalizer & Crossfade", onclick: openEqualizerSheet }),
-          element("button", { class: "chip", text: "Sleep-Timer", onclick: openSleepSheet }),
-        ]),
-      ]),
-
-      element("div", { class: "section" }, [
-        element("h2", { text: "Amperfy verbinden" }),
+  function amperfySettings(status) {
+    return configCard(
+      "Amperfy / Subsonic",
+      "Amperfy bringt CarPlay mit – das ist hier das Gegenstück zu Android Auto.",
+      ICONS.phone,
+      [
         element("dl", { class: "info" }, [
           element("dt", { text: "Servertyp" }),
           element("dd", { text: "Subsonic" }),
@@ -1828,68 +1851,110 @@
           element("dt", { text: "Passwort" }),
           element("dd", { text: status.passwordRequired ? "wie unter Zugang gesetzt" : "kein Passwort nötig" }),
         ]),
-        element("p", {
-          class: "muted",
-          text: "Amperfy bringt CarPlay mit – das ist hier das Gegenstück zu Android Auto.",
-        }),
-      ]),
+      ]
+    );
+  }
 
-      element("div", { class: "section" }, [
-        element("h2", { text: "Status" }),
-        element("dl", { class: "info" }, [
-          element("dt", { text: "Version" }),
-          element("dd", { text: status.version }),
-          element("dt", { text: "Titel in Bibliothek" }),
-          element("dd", { text: String(status.libraryTracks) }),
-          element("dt", { text: "Server-Zwischenspeicher" }),
-          element("dd", { text: `${status.cache.tracks} Titel · ${formatBytes(status.cache.bytes)}` }),
-          element("dt", { text: "Offline auf diesem Gerät" }),
-          element("dd", { text: `${Offline.tracks().length} Titel · ${formatBytes(usage.usage)}` }),
-          element("dt", { text: "Songtext-Übersetzung" }),
-          element("dd", {
-            text: status.translation.enabled
-              ? `${status.translation.provider} → ${status.translation.language}`
-              : "nicht konfiguriert",
-          }),
-          element("dt", { text: "SponsorBlock" }),
-          element("dd", { text: status.sponsorblock ? "aktiv" : "aus" }),
-          element("dt", { text: "YouTube-Music-Konto" }),
-          element("dd", { text: status.ytmAccount ? "verbunden" : "nicht verbunden" }),
-          element("dt", { text: "Navidrome" }),
-          element("dd", {
-            text: status.navidrome && status.navidrome.configured
-              ? status.navidrome.reachable
-                ? `verbunden${status.navidrome.version ? " · " + status.navidrome.version : ""}`
-                : "konfiguriert, nicht erreichbar"
-              : "nicht konfiguriert",
-          }),
-          element("dt", { text: "MediaSync" }),
-          element("dd", {
-            text: status.mediasync && status.mediasync.configured
-              ? status.mediasync.reachable
-                ? `verbunden${status.mediasync.version ? " · " + status.mediasync.version : ""}`
-                : "konfiguriert, nicht erreichbar"
-              : "nicht konfiguriert",
-          }),
+  function linkStatus(item) {
+    if (!item || !item.configured) return "nicht konfiguriert";
+    if (item.reachable) return item.version ? `verbunden · ${item.version}` : "verbunden";
+    return "nicht erreichbar";
+  }
+
+  async function renderSettings() {
+    setTitle("Mehr");
+    loading();
+    const status = await api("/api/status");
+    status.cache = status.cache || { tracks: 0, bytes: 0 };
+    state.status = status;
+    const nd = status.navidrome || {};
+    const ms = status.mediasync || {};
+
+    $("view").replaceChildren(
+      pageHead("Mehr", "Wiedergabe, Verbindungen und Konto."),
+      element("div", { class: "more-list" }, [
+        moreRow(
+          "Konfiguration",
+          [status.passwordRequired ? "Zugang aktiv" : "Zugang einrichten", linkStatus(nd), linkStatus(ms)].join(" · "),
+          ICONS.gear,
+          () => navigate({ name: "config" })
+        ),
+        moreRow("Wiedergabe", "Equalizer, Crossfade und Sleep-Timer", ICONS.eq, openEqualizerSheet),
+        moreRow("Sleep-Timer", "Wiedergabe nach einer Zeit beenden", ICONS.sleep, openSleepSheet),
+        moreRow(
+          "Status",
+          `Version ${status.version} · ${status.libraryTracks} Titel`,
+          ICONS.info,
+          () => navigate({ name: "config" })
+        ),
+        moreRow("Abmelden", state.user || status.subsonicUser || "", ICONS.logout, async () => {
+          await api("/api/logout", { method: "POST" });
+          localStorage.removeItem(TOKEN_KEY);
+          location.reload();
+        }),
+      ])
+    );
+  }
+
+  async function renderConfig() {
+    setTitle("Konfiguration");
+    loading();
+    const status = await api("/api/status");
+    status.cache = status.cache || { tracks: 0, bytes: 0 };
+    state.status = status;
+    const usage = await Offline.usage();
+    const nd = status.navidrome || {};
+    const ms = status.mediasync || {};
+
+    $("view").replaceChildren(
+      pageHead("Konfiguration", "Verbindungen und Zugangsdaten an einem Ort."),
+      element("div", { class: "config-summary" }, [
+        connectionPill(Boolean(status.passwordRequired), status.passwordRequired ? "Zugang" : "Kein Zugang"),
+        connectionPill(Boolean(nd.configured && nd.reachable), nd.configured && nd.reachable ? "Navidrome" : "Navidrome aus"),
+        connectionPill(Boolean(ms.configured && ms.reachable), ms.configured && ms.reachable ? "MediaSync" : "MediaSync aus"),
+      ]),
+      element("div", { class: "config-grid" }, [
+        accountSettings(status),
+        navidromeSettings(status),
+        mediasyncSettings(status),
+        amperfySettings(status),
+        configCard("System", "Speicher, Dienste und App-Version.", ICONS.info, [
+          element("dl", { class: "info" }, [
+            element("dt", { text: "Version" }),
+            element("dd", { text: status.version }),
+            element("dt", { text: "Titel in Bibliothek" }),
+            element("dd", { text: String(status.libraryTracks) }),
+            element("dt", { text: "Server-Zwischenspeicher" }),
+            element("dd", { text: `${status.cache.tracks} Titel · ${formatBytes(status.cache.bytes)}` }),
+            element("dt", { text: "Offline auf diesem Gerät" }),
+            element("dd", { text: `${Offline.tracks().length} Titel · ${formatBytes(usage.usage)}` }),
+            element("dt", { text: "Songtext-Übersetzung" }),
+            element("dd", {
+              text: status.translation.enabled
+                ? `${status.translation.provider} → ${status.translation.language}`
+                : "nicht konfiguriert",
+            }),
+            element("dt", { text: "SponsorBlock" }),
+            element("dd", { text: status.sponsorblock ? "aktiv" : "aus" }),
+            element("dt", { text: "YouTube-Music-Konto" }),
+            element("dd", { text: status.ytmAccount ? "verbunden" : "nicht verbunden" }),
+            element("dt", { text: "Navidrome" }),
+            element("dd", { text: linkStatus(nd) }),
+            element("dt", { text: "MediaSync" }),
+            element("dd", { text: linkStatus(ms) }),
+          ]),
+          element("div", { class: "row-buttons" }, [
+            element("button", {
+              class: "chip",
+              text: "Zwischenspeicher leeren",
+              onclick: async () => {
+                await api("/api/cache/clear", { method: "POST" });
+                toast("Geleert");
+                render(state.route, true);
+              },
+            }),
+          ]),
         ]),
-        element("button", {
-          class: "chip",
-          text: "Server-Zwischenspeicher leeren",
-          onclick: async () => {
-            await api("/api/cache/clear", { method: "POST" });
-            toast("Geleert");
-            render(state.route, true);
-          },
-        }),
-        element("button", {
-          class: "chip",
-          text: "Abmelden",
-          onclick: async () => {
-            await api("/api/logout", { method: "POST" });
-            localStorage.removeItem(TOKEN_KEY);
-            location.reload();
-          },
-        }),
       ])
     );
   }
@@ -2642,9 +2707,9 @@
     if (!list.length) return;
     await ensureLibraryTargets();
     if (!mediasyncReady() && !navidromeReady()) {
-      toast("Navidrome oder MediaSync unter Mehr verbinden");
+      toast("Navidrome oder MediaSync unter Konfig verbinden");
       $("now-playing").hidden = true;
-      navigate({ name: "settings" });
+      navigate({ name: "config" });
       return;
     }
     const heading = list.length === 1 ? "Download – Playlist wählen" : `Download – ${list.length} Titel`;
@@ -2938,8 +3003,8 @@
       openDownloadSheet(track);
       return;
     }
-    toast("Navidrome oder MediaSync unter Mehr verbinden");
-    navigate({ name: "settings" });
+    toast("Navidrome oder MediaSync unter Konfig verbinden");
+    navigate({ name: "config" });
     $("now-playing").hidden = true;
   });
 
