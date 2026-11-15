@@ -1023,13 +1023,7 @@ async def search_covers(request: Request, payload: dict = Body(...)):
         "navidromeId": payload.get("navidromeId") or "",
         "path": payload.get("path") or "",
     }
-    candidates = await run_in_threadpool(nd_artwork.search_covers, track)
-    path = await run_in_threadpool(nd_artwork.resolve_audio_path, track)
-    return {
-        "candidates": candidates,
-        "file": str(path) if path else "",
-        "fileFound": bool(path),
-    }
+    return await run_in_threadpool(nd_artwork.search_covers, track)
 
 
 @router.post("/covers/embed")

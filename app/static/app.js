@@ -3004,7 +3004,9 @@
       openSheet(heading, [
         element("p", {
           class: "muted",
-          text: "Keine Cover gefunden. Den Titel zuerst nach Navidrome laden: ⋯ → Herunterladen → Playlist oder „nur Bibliothek“. Danach hier erneut Cover wählen.",
+          text: data.query
+            ? `Keine Original-Cover im Netz für „${data.query}“. Interpret/Album in Navidrome prüfen.`
+            : "Keine Original-Cover im Netz gefunden.",
         }),
         canImport
           ? element("button", {
@@ -3040,7 +3042,7 @@
             },
             [
               element("img", { src: coverUrl(item.url, 400), alt: item.label || "Cover" }),
-              element("span", { text: `${item.source}: ${item.label}` }),
+              element("span", { text: `${item.original === false ? "Video · " : ""}${item.source}: ${item.label}` }),
             ]
           )
         )
@@ -3056,18 +3058,18 @@
             url: chosen.url,
             album: !!album,
             videoId: String(track.id || "").startsWith("nd:") ? "" : track.id,
-            title: track.title,
-            artist: track.artist,
-            album: track.album || "",
-            navidromeId: track.navidromeId || (String(track.id || "").startsWith("nd:") ? String(track.id).slice(3) : ""),
-            path: track.path || "",
+            title: data.title || track.title,
+            artist: data.artist || track.artist,
+            album: data.album || track.album || "",
+            navidromeId: data.navidromeId || track.navidromeId || (String(track.id || "").startsWith("nd:") ? String(track.id).slice(3) : ""),
+            path: data.path || track.path || "",
           },
         });
         closeSheet();
         toast(
           album
-            ? `Cover in ${result.files} Dateien eingebettet`
-            : "Cover in die Audiodatei eingebettet"
+            ? `Cover in ${result.files} Dateien und den Albumordner geschrieben. Navidrome scannt neu.`
+            : "Cover in die Datei geschrieben. Navidrome scannt neu."
         );
       } catch (error) {
         toast(error.message);
@@ -3077,22 +3079,22 @@
       element("p", {
         class: "muted",
         text: data.fileFound
-          ? "Cover antippen und einbetten. Navidrome scannt danach neu."
-          : "Cover gefunden, aber die Audiodatei auf dem NAS wurde nicht gefunden. Musik-Pfad in Unraid prüfen.",
+          ? `Original-Cover für ${data.query || "diesen Titel"}. Antippen, dann speichern – in die Audiodatei und nach Navidrome.`
+          : "Cover gefunden, aber die Audiodatei auf dem NAS fehlt. Unraid-Musik-Pfad prüfen.",
       }),
       grid,
       element("div", { class: "sheet-footer" }, [
         element("button", {
           type: "button",
           class: "action primary",
-          text: "In diese Datei einbetten",
-          onclick: () => apply(false),
+          text: "In Datei + Navidrome speichern",
+          onclick: () => apply(true),
         }),
         element("button", {
           type: "button",
           class: "action",
-          text: "Für das ganze Album (Ordner)",
-          onclick: () => apply(true),
+          text: "Nur diese Datei",
+          onclick: () => apply(false),
         }),
       ]),
     ]);

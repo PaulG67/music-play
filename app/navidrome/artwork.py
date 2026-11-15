@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 import tempfile
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -22,6 +25,11 @@ from app.ytm import mapper
 
 _AUDIO = {".m4a", ".mp4", ".mp3", ".flac", ".ogg", ".opus", ".aac"}
 _HEADERS = {"User-Agent": f"MusicPlay/{APP_VERSION} (https://github.com/PaulG67/music-play)"}
+_MB_HEADERS = {
+    "User-Agent": f"MusicPlay/{APP_VERSION} ( https://github.com/PaulG67/music-play )",
+    "Accept": "application/json",
+}
+_PLACEHOLDER_ALBUMS = {"", "singles", "unknown", "unbekannt", "single", "various", "va"}
 
 
 def _music_root() -> Path:
@@ -74,6 +82,10 @@ def resolve_audio_path(track: dict) -> Path | None:
             options.append(root / path)
         elif str(path).startswith("/music/") and root != Path("/music"):
             options.append(root / str(path).lstrip("/").split("/", 1)[-1])
+        host = (settings.navidrome_music_host or "").rstrip("/")
+        text = str(path).replace("\\", "/")
+        if host and text.startswith(host + "/"):
+            options.append(root / text[len(host) + 1 :])
         for option in options:
             try:
                 resolved = option.resolve()
@@ -85,15 +97,43 @@ def resolve_audio_path(track: dict) -> Path | None:
             seen.add(key)
             if resolved.is_file() and resolved.suffix.lower() in _AUDIO and _inside_library(resolved):
                 return resolved
+    return _guess_audio_path(track)
+
+
+def _guess_audio_path(track: dict) -> Path | None:
+    from app.navidrome.importer import _safe
+
+    root = _music_root()
+    artist = _safe(track.get("artist"), "")
+    album = _safe(track.get("album"), "")
+    title = _safe(track.get("title"), "")
+    folders = []
+    if artist and album:
+        folders.append(root / artist / album)
+    if artist:
+        artist_dir = root / artist
+        if artist_dir.is_dir():
+            folders.extend(sorted(p for p in artist_dir.iterdir() if p.is_dir())[:12])
+    needle = title.casefold()
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        files = [path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in _AUDIO]
+        if needle:
+            match = next((path for path in files if needle in path.stem.casefold()), None)
+            if match and _inside_library(match):
+                return match
+        if len(files) == 1 and _inside_library(files[0]):
+            return files[0]
     return None
 
 
-def _candidate(url: str, source: str, label: str) -> dict | None:
+def _candidate(url: str, source: str, label: str, *, original: bool = True) -> dict | None:
     url = (url or "").strip()
     if not url or url.startswith("data:"):
         return None
     digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
-    return {"id": digest, "url": url, "source": source, "label": label}
+    return {"id": digest, "url": url, "source": source, "label": label, "original": original}
 
 
 def _itunes_covers(artist: str, album: str) -> list[dict]:
@@ -172,7 +212,7 @@ def _youtube_frame_covers(video_id: str) -> list[dict]:
         ("YouTube HQ", "hqdefault.jpg"),
         ("YouTube SD", "sddefault.jpg"),
     ):
-        found.append(_candidate(f"https://i.ytimg.com/vi/{video_id}/{suffix}", "YouTube", name))
+        found.append(_candidate(f"https://i.ytimg.com/vi/{video_id}/{suffix}", "YouTube-Video", name, original=False))
     return [item for item in found if item]
 
 
@@ -182,8 +222,6 @@ def _youtube_covers(track: dict) -> list[dict]:
     if thumb and not str(thumb).startswith("/"):
         scaled = mapper.upscale_thumbnail(thumb, 1200) or thumb
         found.append(_candidate(scaled, "YouTube Music", "Aktuelles Vorschaubild"))
-    elif str(thumb).startswith("/api/"):
-        found.append(_candidate(str(thumb).split("?")[0], "Navidrome", "Aktuelles Navidrome-Cover"))
     album_id = track.get("albumId") or track.get("album_id")
     if album_id and not str(album_id).startswith("nd:"):
         try:
@@ -221,6 +259,7 @@ def _youtube_covers(track: dict) -> list[dict]:
                         mapper.upscale_thumbnail(url, 1200) or url,
                         "YouTube Music",
                         song.get("title") or "Titel",
+                        original=False,
                     )
                 )
     found.extend(_youtube_frame_covers(_video_id(track)))
@@ -251,10 +290,10 @@ def _enrich_track(track: dict) -> dict:
         except Exception:
             song = None
         if song:
-            data["title"] = data.get("title") or song.get("title") or ""
-            data["artist"] = data.get("artist") or song.get("artist") or ""
-            data["album"] = data.get("album") or song.get("album") or ""
-            data["path"] = data.get("path") or song.get("path") or ""
+            data["title"] = song.get("title") or data.get("title") or ""
+            data["artist"] = song.get("artist") or data.get("artist") or ""
+            data["album"] = song.get("album") or data.get("album") or ""
+            data["path"] = song.get("path") or data.get("path") or ""
             data["thumbnail"] = data.get("thumbnail") or song.get("thumbnail") or ""
         with session_scope() as session:
             link = repo.navidrome_link_by_song(session, nd_id)
@@ -266,20 +305,124 @@ def _enrich_track(track: dict) -> dict:
     return data
 
 
-def search_covers(track: dict) -> list[dict]:
+def _mb_term(value: str) -> str:
+    cleaned = re.sub(r'[+\-!(){}\[\]^"~*?:\\/]', " ", value or "")
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _coverart_images(mbid: str, label: str) -> list[dict]:
+    try:
+        response = httpx.get(
+            f"https://coverartarchive.org/release/{mbid}",
+            headers=_HEADERS,
+            timeout=15.0,
+            follow_redirects=True,
+        )
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        images = response.json().get("images") or []
+    except Exception as exc:
+        logger.debug("Cover Art Archive {}: {}", mbid, exc)
+        return []
+    found = []
+    for image in images:
+        thumbs = image.get("thumbnails") or {}
+        url = thumbs.get("1200") or thumbs.get("large") or image.get("image")
+        if not url:
+            continue
+        kind = "Vorderseite" if image.get("front") else (image.get("types") or ["Cover"])[0]
+        found.append(_candidate(url, "Cover Art Archive", f"{label} · {kind}".strip(" ·")))
+        if image.get("front"):
+            break
+    return [item for item in found if item]
+
+
+def _musicbrainz_covers(artist: str, album: str, title: str) -> list[dict]:
+    artist_q = _mb_term(artist)
+    album_q = _mb_term(album)
+    title_q = _mb_term(title)
+    if not artist_q:
+        return []
+    queries = []
+    if album_q and album_q.casefold() not in _PLACEHOLDER_ALBUMS:
+        queries.append(("release", f'release:"{album_q}" AND artist:"{artist_q}"'))
+    if title_q:
+        queries.append(("recording", f'recording:"{title_q}" AND artist:"{artist_q}"'))
+    if not queries:
+        return []
+    mbids: list[tuple[str, str]] = []
+    for index, (kind, query) in enumerate(queries[:2]):
+        if index:
+            time.sleep(1.1)
+        try:
+            response = httpx.get(
+                f"https://musicbrainz.org/ws/2/{kind}/",
+                params={"query": query, "fmt": "json", "limit": 5},
+                headers=_MB_HEADERS,
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            logger.warning("MusicBrainz-Suche fehlgeschlagen: {}", exc)
+            continue
+        if kind == "release":
+            for row in payload.get("releases") or []:
+                mbid = str(row.get("id") or "")
+                name = row.get("title") or album_q or "Album"
+                if mbid:
+                    mbids.append((mbid, name))
+        else:
+            for row in payload.get("recordings") or []:
+                for release in row.get("releases") or []:
+                    mbid = str(release.get("id") or "")
+                    name = release.get("title") or album_q or "Album"
+                    if mbid:
+                        mbids.append((mbid, name))
+        if len(mbids) >= 5:
+            break
+    unique_ids = []
+    seen = set()
+    for mbid, name in mbids:
+        if mbid in seen:
+            continue
+        seen.add(mbid)
+        unique_ids.append((mbid, name))
+        if len(unique_ids) >= 5:
+            break
+    found = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        for batch in pool.map(lambda item: _coverart_images(item[0], item[1]), unique_ids):
+            found.extend(batch)
+    return found
+
+
+def search_covers(track: dict) -> dict:
     data = _enrich_track(track)
     artist = str(data.get("artist") or "").strip()
     album = str(data.get("album") or "").strip()
     title = str(data.get("title") or "").strip()
-    items = []
-    items.extend(_youtube_covers(data))
-    items.extend(_itunes_covers(artist, album or title))
-    if artist and title and album != title:
-        items.extend(_itunes_covers(artist, title))
-    items.extend(_deezer_covers(artist, album or title))
+    album_query = album if album.casefold() not in _PLACEHOLDER_ALBUMS else title
+    items: list[dict] = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        jobs = [
+            pool.submit(_musicbrainz_covers, artist, album_query, title),
+            pool.submit(_itunes_covers, artist, album_query),
+            pool.submit(_deezer_covers, artist, album_query),
+            pool.submit(_youtube_covers, data),
+        ]
+        for job in jobs:
+            try:
+                items.extend(job.result())
+            except Exception as exc:
+                logger.warning("Cover-Quelle fehlgeschlagen: {}", exc)
     unique = []
     seen = set()
-    for item in items:
+    for item in sorted(
+        [row for row in items if row],
+        key=lambda row: (not row.get("original", True), row.get("source") == "YouTube-Video"),
+    ):
         key = item["url"].split("?")[0]
         if key in seen:
             continue
@@ -287,7 +430,22 @@ def search_covers(track: dict) -> list[dict]:
         unique.append(item)
         if len(unique) >= 12:
             break
-    return unique
+    originals = [item for item in unique if item.get("original")]
+    if originals:
+        unique = originals + [item for item in unique if not item.get("original")][:3]
+        unique = unique[:12]
+    path = resolve_audio_path(data)
+    return {
+        "candidates": unique,
+        "artist": artist,
+        "album": album or album_query,
+        "title": title,
+        "query": " – ".join(part for part in (artist, album_query or title) if part),
+        "file": str(path) if path else "",
+        "fileFound": bool(path),
+        "navidromeId": data.get("navidromeId") or "",
+        "path": data.get("path") or (str(path) if path else ""),
+    }
 
 
 def _fetch_image(url: str) -> tuple[bytes, str]:
@@ -384,7 +542,7 @@ def embed_into_file(path: Path, jpeg: bytes) -> None:
 
 
 def _write_folder_image(folder: Path, jpeg: bytes) -> None:
-    for name in ("cover.jpg", "folder.jpg"):
+    for name in ("cover.jpg", "folder.jpg", "album.jpg", "front.jpg"):
         target = folder / name
         try:
             target.write_bytes(jpeg)
@@ -393,6 +551,7 @@ def _write_folder_image(folder: Path, jpeg: bytes) -> None:
 
 
 def embed_cover(track: dict, url: str, *, album: bool = False) -> dict:
+    track = _enrich_track(track)
     path = resolve_audio_path(track)
     if path is None:
         raise RuntimeError(
@@ -412,6 +571,7 @@ def embed_cover(track: dict, url: str, *, album: bool = False) -> dict:
     for target in targets:
         try:
             embed_into_file(target, jpeg)
+            target.touch(exist_ok=True)
             embedded += 1
         except Exception as exc:
             logger.warning("Cover in {} nicht eingebettet: {}", target.name, exc)
