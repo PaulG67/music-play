@@ -1,0 +1,8 @@
+#!/bin/sh
+# Push every successful commit to origin. Never force-push.
+git_dir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+[ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ] && exit 0
+[ -f "$git_dir/MERGE_HEAD" ] && exit 0
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null) || exit 0
+[ "$branch" = "HEAD" ] && exit 0
+git push -u origin "$branch"

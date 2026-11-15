@@ -1,0 +1,14 @@
+---
+description: Nach abgeschlossener Arbeit immer committen und nach GitHub pushen
+alwaysApply: true
+---
+
+# Auto-Commit und Auto-Push
+
+Für dieses Repo gilt (überschreibt die allgemeine Zurückhaltung bei Commit/Push):
+
+- Nach abgeschlossener, sinnvoller Änderung: committen und sofort `git push -u origin HEAD` ausführen. Nicht extra nachfragen.
+- Commit-Message auf Englisch, 1–2 Sätze, Fokus auf das Warum. Keine Secrets (`.env`, Passwörter, Tokens).
+- Nie `--force` / `--force-with-lease` auf `main`/`master`. Nie `--no-verify`.
+- Leere Commits vermeiden. Hooks nicht umgehen.
+- Ein `post-commit`-Hook pusht zusätzlich; trotzdem selbst pushen, falls der Hook fehlt.
