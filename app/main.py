@@ -25,6 +25,7 @@ STATIC_DIR = "app/static"
 async def lifespan(_: FastAPI):
     init_db()
     ensure_icons()
+    auth_store.apply_env_overrides()
     logger.info(
         "{} {} gestartet - Benutzer '{}', Streaming '{}', Passwort {}, Navidrome {}",
         APP_NAME,

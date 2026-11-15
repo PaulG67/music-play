@@ -361,3 +361,64 @@ def save(username_value: str, password_value: str) -> dict:
     if not password_required():
         return ensure_setup_user(username_value, password_value)
     return save_user(username_value, password=password_value, new_username=username_value)
+
+
+def _admin_user() -> dict | None:
+    users = load_users()
+    for user in users:
+        if user.get("role") == "admin":
+            return user
+    return users[0] if users else None
+
+
+def apply_env_overrides() -> None:
+    """Map Unraid/Docker env fields onto the admin account.
+
+    Empty Unraid boxes stay empty strings and are ignored, so an in-app
+    password is not wiped on restart. Non-empty values win on every start.
+    """
+    from app.core.logging import logger
+
+    env_user = clean_secret(os.getenv("SUBSONIC_USER"))
+    env_pass = _env_password()
+    nd_update = {}
+    nd_url = clean_secret(os.getenv("NAVIDROME_URL") or "").rstrip("/")
+    nd_name = clean_secret(os.getenv("NAVIDROME_USER") or "")
+    nd_pass = clean_secret(os.getenv("NAVIDROME_PASSWORD") or "")
+    if nd_url:
+        nd_update["url"] = nd_url
+    if nd_name:
+        nd_update["username"] = nd_name
+    if nd_pass:
+        nd_update["password"] = nd_pass
+
+    if not env_user and not env_pass and not nd_update:
+        return
+
+    admin = _admin_user()
+    if admin is None:
+        if env_pass:
+            ensure_setup_user(env_user or "musicplay", env_pass)
+            admin = _admin_user()
+        else:
+            return
+    if admin is None:
+        return
+
+    changes = []
+    try:
+        kwargs: dict = {}
+        if env_user and _key(env_user) != _key(admin["username"]):
+            kwargs["new_username"] = env_user
+            changes.append("Benutzername")
+        if env_pass and env_pass != (admin.get("password") or ""):
+            kwargs["password"] = env_pass
+            changes.append("Passwort")
+        if nd_update:
+            kwargs["navidrome"] = nd_update
+            changes.append("Navidrome")
+        if kwargs:
+            save_user(admin["username"], **kwargs)
+            logger.info("Admin-Konto aus Container-Vorlage übernommen ({})", ", ".join(changes))
+    except (KeyError, ValueError) as exc:
+        logger.warning("Admin-Konto aus Vorlage nicht übernommen: {}", exc)

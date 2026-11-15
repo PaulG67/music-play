@@ -127,14 +127,14 @@ Dann in der Unraid-WebUI:
 
 1. **Docker → Container hinzufügen**
 2. Oben **Template** → **music-play** (User Templates)
-3. **Passwort** setzen, Rest kann so bleiben
+3. **Admin-Benutzername** und **Admin-Passwort** setzen (gelten automatisch für das Admin-Konto in der App und für Amperfy)
 4. **Apply**
 
 WebUI: `http://<unraid-ip>:5080`
 
-Beim ersten Start ist **kein Passwort** nötig. Unter **Mehr → Zugang** kannst du
-später Benutzername und Passwort setzen (gilt auch für Amperfy). Das Unraid-Feld
-Passwort wird ignoriert.
+Die Unraid-Felder Admin-Benutzername und Admin-Passwort werden beim Start auf das
+Administrator-Konto übernommen. Weitere Benutzer legst du in der App unter
+**Mehr → Konfig** an.
 
 Navidrome: unter **Mehr → Navidrome** URL, Benutzer und Passwort eintragen. In der
 Unraid-Vorlage denselben **Musik**-Share wie Navidrome nach `/music` einhängen
@@ -177,8 +177,8 @@ In Amperfy → *Login*:
 |---|---|
 | Server-Typ | **Subsonic** |
 | URL | `http://<unraid-ip>:5080` (oder eigene IP / HTTPS-Adresse) |
-| Benutzername | unter *Mehr → Zugang*, sonst `SUBSONIC_USER` / `musicplay` |
-| Passwort | leer, solange keins unter *Mehr* gesetzt ist |
+| Benutzername | derselbe wie **Admin-Benutzername** in Unraid (weitere Konten unter *Mehr → Konfig*) |
+| Passwort | dasselbe wie **Admin-Passwort** in Unraid |
 
 Die gleichen Angaben stehen in der Weboberfläche unter *Mehr*. Andere Subsonic-Clients
 (Symfonium, Feishin, play:Sub, Substreamer) funktionieren genauso. Amperfy bringt CarPlay,
@@ -191,8 +191,8 @@ Alle Werte als Umgebungsvariablen, siehe `.env.example`:
 | Variable | Standard | Bedeutung |
 |---|---|---|
 | `PORT` | `5080` | Web- und Subsonic-Port. Nicht 5060 (Chrome: ERR_UNSAFE_PORT) |
-| `SUBSONIC_USER` | `musicplay` | Vorschlag für den Benutzernamen, in der App änderbar |
-| `SUBSONIC_PASSWORD` | leer | Wird ignoriert; Passwort in der App unter Mehr setzen |
+| `SUBSONIC_USER` | `musicplay` | Admin-Benutzername (Web-App und Amperfy), wird beim Start übernommen |
+| `SUBSONIC_PASSWORD` | leer | Admin-Passwort, wird beim Start auf das Admin-Konto übernommen |
 | `SERVER_URL` | – | Externe Basis-URL hinter einem Reverse Proxy |
 | `YTM_LANGUAGE` / `YTM_LOCATION` | `de` / `CH` | Sprache und Region der Ergebnisse |
 | `STREAM_MODE` | `proxy` | `proxy` oder `redirect` (siehe unten) |

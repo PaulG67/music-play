@@ -29,126 +29,126 @@
   <Requires/>
 
   <Config Name="WebUI Port" Target="5080" Default="5080" Mode="tcp"
-          Description="Host-Port im Bridge-Netz. Nicht 5060 – Chrome/Edge sperren den SIP-Port (ERR_UNSAFE_PORT)."
+          Description="Port in der Unraid-Docker-Ansicht (Bridge-Netz), unter dem du Music Play im Browser öffnest. Nicht 5060 – Chrome/Edge blockieren diesen Port."
           Type="Port" Display="always" Required="true" Mask="false">5080</Config>
 
   <Config Name="App-Port" Target="PORT" Default="5080" Mode=""
-          Description="Port, auf dem die App wirklich lauscht. Bei eigener IP (br0) zählt NUR dieses Feld, nicht WebUI Port. 80 = http://IP ohne Port. Nicht 5060."
+          Description="Port, auf dem die App im Container wirklich lauscht. Bei eigener IP (br0) zählt nur dieses Feld, nicht WebUI Port. 80 = Aufruf ohne Port in der URL. Nicht 5060."
           Type="Variable" Display="always" Required="true" Mask="false">5080</Config>
 
   <Config Name="Config" Target="/config" Default="/mnt/user/appdata/music-play/config" Mode="rw"
-          Description="Datenbank mit Favoriten, Playlists und Wiedergabeverlauf."
+          Description="Dauerhafter Speicher: Benutzerkonten, verschlüsselte Passwörter, Favoriten, Playlists und Verlauf. Muss erhalten bleiben, sonst sind Logins nach einem Update weg."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/music-play/config</Config>
 
   <Config Name="Cache" Target="/cache" Default="/mnt/user/appdata/music-play/cache" Mode="rw"
-          Description="Zwischengespeicherte Audiodateien und Cover."
+          Description="Zwischenspeicher für Audiodateien und Cover, damit Wiedergabe nicht jedes Mal neu von YouTube geladen wird. Kann bei Platzmangel geleert werden."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/music-play/cache</Config>
 
   <Config Name="Logs" Target="/logs" Default="/mnt/user/appdata/music-play/logs" Mode="rw"
-          Description="Logdateien."
+          Description="Textdateien mit Fehlermeldungen, z. B. wenn Navidrome oder YouTube nicht erreichbar ist. Nur zur Fehlersuche nötig."
           Type="Path" Display="advanced" Required="false" Mask="false">/mnt/user/appdata/music-play/logs</Config>
 
-  <Config Name="Benutzername" Target="SUBSONIC_USER" Default="musicplay" Mode=""
-          Description="Vorschlag fuer den Amperfy-Benutzernamen. Kann in der App unter Mehr geaendert werden."
-          Type="Variable" Display="always" Required="false" Mask="false">musicplay</Config>
+  <Config Name="Admin-Benutzername" Target="SUBSONIC_USER" Default="musicplay" Mode=""
+          Description="Login für den Administrator: Web-App und Amperfy (Subsonic). Wird beim Start automatisch auf das Admin-Konto übernommen. Weitere Benutzer legst du später in der App unter Mehr → Konfig an."
+          Type="Variable" Display="always" Required="true" Mask="false">musicplay</Config>
 
-  <Config Name="Passwort" Target="SUBSONIC_PASSWORD" Default="" Mode=""
-          Description="Nicht noetig. Passwort in der App unter Mehr setzen. Unraid-Passwortfelder werden ignoriert."
+  <Config Name="Admin-Passwort" Target="SUBSONIC_PASSWORD" Default="" Mode=""
+          Description="Passwort des Administrators (mindestens 8 Zeichen). Wird beim Container-Start automatisch auf das Admin-Konto übernommen – für die Web-App und für Amperfy. Leer lassen, wenn du das Passwort nur in der App setzen willst."
           Type="Variable" Display="always" Required="false" Mask="true"></Config>
 
   <Config Name="Externe URL" Target="SERVER_URL" Default="" Mode=""
-          Description="Optional, z.B. https://music.example.com wenn ueber Reverse Proxy erreichbar."
+          Description="Nur nötig hinter einem Reverse Proxy, z. B. https://music.example.com. Die App und Amperfy wissen dann, unter welcher öffentlichen Adresse der Server erreichbar ist."
           Type="Variable" Display="always" Required="false" Mask="false"></Config>
 
   <Config Name="Sprache" Target="YTM_LANGUAGE" Default="de" Mode=""
-          Description="Sprache der YouTube-Music-Ergebnisse."
+          Description="Sprache der Suche, Startseite und Vorschläge von YouTube Music, z. B. de oder en."
           Type="Variable" Display="advanced" Required="false" Mask="false">de</Config>
 
   <Config Name="Region" Target="YTM_LOCATION" Default="CH" Mode=""
-          Description="Laendercode fuer Charts und Empfehlungen."
+          Description="Ländercode für Charts und Empfehlungen, z. B. CH, DE oder AT. Beeinflusst, welche Titel YouTube Music vorschlägt."
           Type="Variable" Display="advanced" Required="false" Mask="false">CH</Config>
 
   <Config Name="Streaming-Modus" Target="STREAM_MODE" Default="proxy" Mode=""
-          Description="proxy = Audio laeuft durch den Container (noetig fuer Amperfy-Offline). redirect = Client laedt direkt bei Google."
+          Description="proxy = Audio läuft durch Music Play (nötig für Amperfy-Offline und Skip-Segmente). redirect = der Player lädt direkt bei Google (spart Traffic auf dem NAS)."
           Type="Variable" Display="advanced" Required="false" Mask="false">proxy</Config>
 
-  <Config Name="Cache-Groesse (GB)" Target="CACHE_MAX_GB" Default="10" Mode=""
-          Description="Obergrenze fuer zwischengespeicherte Audiodateien."
+  <Config Name="Cache-Größe (GB)" Target="CACHE_MAX_GB" Default="10" Mode=""
+          Description="Maximale Größe des Audio-Zwischenspeichers auf dem NAS. Ältere Dateien werden automatisch gelöscht, wenn das Limit erreicht ist."
           Type="Variable" Display="advanced" Required="false" Mask="false">10</Config>
 
   <Config Name="Nach AAC wandeln" Target="TRANSCODE_TO_AAC" Default="true" Mode=""
-          Description="Opus nach AAC konvertieren, wenn YouTube kein m4a liefert. iOS spielt kein Opus."
+          Description="Wandelt YouTube-Opus nach AAC, wenn kein m4a geliefert wird. iPhone und Amperfy spielen kein Opus – deshalb eingeschaltet lassen."
           Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
 
   <Config Name="YTM-Anmeldung" Target="YTM_AUTH_FILE" Default="" Mode=""
-          Description="Optional: Pfad zu einer exportierten ytmusicapi-Anmeldung, z.B. /config/ytmusic_auth.json, um eigene YouTube-Music-Playlists zu sehen."
+          Description="Optionaler Pfad zu einer exportierten YouTube-Music-Anmeldung, z. B. /config/ytmusic_auth.json. Nur nötig, um deine eigenen YouTube-Music-Playlists zu sehen – nicht für Navidrome."
           Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
   <Config Name="SponsorBlock" Target="SPONSORBLOCK" Default="true" Mode=""
-          Description="Intros, Outros und Werbung in Musikvideos automatisch überspringen."
+          Description="Überspringt in Musikvideos automatisch Intros, Outros und Werbung anhand der SponsorBlock-Datenbank."
           Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
 
   <Config Name="ReturnYouTubeDislike" Target="RETURN_YOUTUBE_DISLIKE" Default="true" Mode=""
-          Description="Like-/Dislike-Zahlen anzeigen."
+          Description="Zeigt Like- und Dislike-Zahlen zu Titeln an. Rein zur Anzeige, ändert nichts an YouTube."
           Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
 
   <Config Name="Übersetzer" Target="TRANSLATE_PROVIDER" Default="none" Mode=""
-          Description="Songtext-Übersetzung: none, libretranslate oder openai (beliebiger OpenAI-kompatibler Endpunkt)."
+          Description="Songtexte übersetzen: none = aus. libretranslate oder openai, wenn du einen Übersetzer-Container (LibreTranslate, Ollama, …) betreibst."
           Type="Variable" Display="advanced" Required="false" Mask="false">none</Config>
 
   <Config Name="Übersetzer-URL" Target="TRANSLATE_URL" Default="" Mode=""
-          Description="z.B. http://libretranslate:5000 oder http://ollama:11434/v1"
+          Description="Adresse des Übersetzers, z. B. http://libretranslate:5000 oder http://ollama:11434/v1. Nur nötig, wenn Übersetzer nicht none ist."
           Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
   <Config Name="Übersetzer-API-Key" Target="TRANSLATE_API_KEY" Default="" Mode=""
-          Description="Optional, je nach Übersetzungsdienst."
+          Description="Schlüssel für den Übersetzungsdienst, falls dieser einen verlangt. Bei lokalem LibreTranslate meist leer."
           Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
 
   <Config Name="Übersetzer-Modell" Target="TRANSLATE_MODEL" Default="gpt-4o-mini" Mode=""
-          Description="Nur bei TRANSLATE_PROVIDER=openai relevant."
+          Description="Modellname nur bei openai-kompatiblen Endpunkten (Ollama, LM Studio). Bei LibreTranslate wirkungslos."
           Type="Variable" Display="advanced" Required="false" Mask="false">gpt-4o-mini</Config>
 
   <Config Name="Zielsprache Übersetzung" Target="TRANSLATE_TARGET" Default="" Mode=""
-          Description="Leer = YTM_LANGUAGE. z.B. de, en, fr."
+          Description="Sprache, in die Songtexte übersetzt werden, z. B. de. Leer = dieselbe Sprache wie unter Sprache."
           Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
 
   <Config Name="Navidrome-URL" Target="NAVIDROME_URL" Default="" Mode=""
-          Description="z.B. http://192.168.0.188:4533 – auch spaeter in der App unter Mehr aenderbar."
+          Description="Adresse deines Navidrome-Servers, z. B. http://192.168.0.188:4533. Wird dem Admin-Konto zugeordnet, damit dessen Playlists in Music Play erscheinen. Jeder weitere Benutzer trägt seine Daten in der App ein."
           Type="Variable" Display="always" Required="false" Mask="false"></Config>
 
   <Config Name="Navidrome-Benutzer" Target="NAVIDROME_USER" Default="" Mode=""
-          Description="Navidrome-Login. Kann in der App unter Mehr gesetzt werden."
+          Description="Navidrome-Login des Administrators. Wird beim Start auf das Admin-Konto übernommen. Playlists und Downloads in Navidrome laufen unter diesem Benutzer."
           Type="Variable" Display="always" Required="false" Mask="false"></Config>
 
   <Config Name="Navidrome-Passwort" Target="NAVIDROME_PASSWORD" Default="" Mode=""
-          Description="Navidrome-Passwort. Sicherer spaeter in der App unter Mehr eintragen."
+          Description="Passwort zum Navidrome-Konto des Administrators. Wird verschlüsselt gespeichert und beim Start dem Admin zugeordnet. Leer = in der App unter Konfig eintragen."
           Type="Variable" Display="always" Required="false" Mask="true"></Config>
 
   <Config Name="Musikbibliothek" Target="/music" Default="/mnt/user/music" Mode="rw"
-          Description="Denselben Ordner wie Navidrome einhaengen. Downloads landen in /music/YouTube/..."
+          Description="Denselben Ordner wie in Navidrome einhängen (meist /mnt/user/music). Nur so kann Music Play Titel nach Navidrome speichern. Ohne diesen Pfad bleiben Downloads nur im Cache."
           Type="Path" Display="always" Required="false" Mask="false">/mnt/user/music</Config>
 
   <Config Name="Navidrome-Importordner" Target="NAVIDROME_IMPORT_FOLDER" Default="YouTube" Mode=""
-          Description="Unterordner in der Musikbibliothek fuer YouTube-Imports."
+          Description="Unterordner in der Musikbibliothek, in den YouTube-Imports gelegt werden, z. B. YouTube. Die Dateien liegen dann unter /music/YouTube/Interpret/Album/."
           Type="Variable" Display="advanced" Required="false" Mask="false">YouTube</Config>
 
   <Config Name="MediaSync-URL" Target="MEDIASYNC_URL" Default="" Mode=""
-          Description="z.B. http://192.168.0.188:8090 – auch spaeter in der App unter Mehr aenderbar."
+          Description="Adresse der MediaSync-App auf Unraid, z. B. http://192.168.0.188:8090. Nur nötig, wenn Downloads zusätzlich in MediaSync-Playlists landen sollen."
           Type="Variable" Display="always" Required="false" Mask="false"></Config>
 
   <Config Name="MediaSync-Benutzer" Target="MEDIASYNC_USER" Default="" Mode=""
-          Description="Nur noetig, wenn MediaSync eine Anmeldung verlangt. Auch unter Mehr setzbar."
+          Description="Nur ausfüllen, wenn MediaSync selbst eine Anmeldung verlangt. Sonst leer lassen."
           Type="Variable" Display="always" Required="false" Mask="false"></Config>
 
   <Config Name="MediaSync-Passwort" Target="MEDIASYNC_PASSWORD" Default="" Mode=""
-          Description="Optional. Sicherer spaeter in der App unter Mehr eintragen."
+          Description="Passwort für MediaSync, falls dort Anmeldung aktiv ist. Kann auch später in der App unter Konfig gesetzt werden."
           Type="Variable" Display="always" Required="false" Mask="true"></Config>
 
   <Config Name="Zeitzone" Target="TZ" Default="Europe/Zurich" Mode=""
-          Description="Zeitzone für Statistiken und Jahresrückblick."
+          Description="Zeitzone für Verlauf, Statistiken und Jahresrückblick, z. B. Europe/Zurich oder Europe/Berlin."
           Type="Variable" Display="always" Required="false" Mask="false">Europe/Zurich</Config>
 
   <Config Name="Log-Level" Target="LOG_LEVEL" Default="INFO" Mode=""
-          Description="DEBUG, INFO, WARNING oder ERROR."
+          Description="Wie ausführlich protokolliert wird: DEBUG (sehr detailliert), INFO (normal), WARNING oder ERROR."
           Type="Variable" Display="advanced" Required="false" Mask="false">INFO</Config>
 </Container>
