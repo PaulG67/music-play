@@ -133,37 +133,66 @@
 
   // ---------------------------------------------------------------- helpers
 
+  function errorDetail(payload, fallback) {
+    const detail = payload && payload.detail;
+    if (typeof detail === "string" && detail.trim()) return detail.trim();
+    if (Array.isArray(detail) && detail.length) {
+      const first = detail[0];
+      if (typeof first === "string") return first;
+      if (first && first.msg) return String(first.msg);
+    }
+    return fallback;
+  }
+
+  function friendlyHttpError(status, message) {
+    const raw = String(message || "");
+    if (status === 403 || /forbidden/i.test(raw)) {
+      return "Zugriff blockiert. Bitte neu anmelden oder die App vollständig schließen und erneut öffnen.";
+    }
+    return raw || `Fehler ${status}`;
+  }
+
   async function api(path, options = {}) {
-    const headers = { "Content-Type": "application/json" };
+    const headers = { ...(options.headers || {}) };
     const token = readStoredToken();
     const skipAuth = path.startsWith("/api/login") || path === "/api/login-hint" || path === "/api/logout";
-    if (token && !skipAuth) headers.Authorization = "Bearer " + token;
+    const method = options.method || "GET";
     const retrying = Boolean(options._retried);
+    const noAuthHeader = Boolean(options._noAuthHeader);
+    if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+    // Do not send Authorization: Bearer — Nginx/Authelia/NPM treat it as proxy login and return 403.
+    if (token && !skipAuth && !noAuthHeader) headers["X-Music-Play-Token"] = token;
     const response = await fetch(path, {
       credentials: "include",
-      headers: { ...headers, ...(options.headers || {}) },
-      method: options.method,
+      headers,
+      method,
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
+    if (response.status === 403 && !skipAuth && !retrying) {
+      return api(path, { ...options, _retried: true, _noAuthHeader: true });
+    }
     if (response.status === 401) {
       const payload = await response.json().catch(() => ({}));
-      const message = typeof payload.detail === "string" ? payload.detail : "Nicht angemeldet";
+      const message = errorDetail(payload, "Nicht angemeldet");
       const skip = path.startsWith("/api/login") || path === "/api/session" || path === "/api/login-hint" || path === "/api/account";
       if (!skip && !retrying) {
         const retryToken = await restoreTokenFromIdb();
         if (retryToken && retryToken !== token) {
           return api(path, { ...options, _retried: true });
         }
+        if (token && !noAuthHeader) {
+          return api(path, { ...options, _retried: true, _noAuthHeader: true });
+        }
       }
       if (!skip) {
         clearToken();
-        showAuthScreen(message === "Zugang einrichten" ? "setup" : "login", message);
+        showAuthScreen(message === "Zugang einrichten" ? "setup" : "login", friendlyHttpError(401, message));
       }
-      throw new Error(message);
+      throw new Error(friendlyHttpError(401, message));
     }
     if (!response.ok) {
-      const detail = await response.json().catch(() => ({}));
-      throw new Error(detail.detail || `Fehler ${response.status}`);
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(friendlyHttpError(response.status, errorDetail(payload, `Fehler ${response.status}`)));
     }
     const data = await response.json();
     if (data && data.token) persistToken(data.token);
@@ -443,8 +472,9 @@
     } catch (exception) {
       $("view").replaceChildren(
         element("div", { class: "empty" }, [
-          element("p", { text: exception.message }),
+          element("p", { text: friendlyHttpError(0, exception.message) }),
           element("button", { class: "chip", text: "Erneut versuchen", onclick: () => render(route, true) }),
+          element("button", { class: "chip", text: "Neu anmelden", onclick: () => signOut() }),
         ])
       );
     }
@@ -3747,6 +3777,6 @@
   }
 
   boot().catch((error) => {
-    showAuthScreen("login", error && error.message);
+    showAuthScreen("login", friendlyHttpError(0, error && error.message));
   });
 })();

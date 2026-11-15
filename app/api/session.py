@@ -15,6 +15,8 @@ from app.core import auth_store
 from app.core.settings import clean_secret, settings
 
 COOKIE_NAME = "music_play_session"
+# Custom header so reverse proxies do not treat the app token as HTTP Basic/JWT.
+TOKEN_HEADER = "x-music-play-token"
 # Browsers cap persistent cookies around 400 days; refresh on each app open.
 MAX_AGE = 60 * 60 * 24 * 400
 
@@ -54,6 +56,12 @@ def _load(token: str | None) -> str | None:
 
 def read(request: Request) -> str | None:
     user = _load(request.cookies.get(COOKIE_NAME))
+    if user:
+        return user
+    custom = (request.headers.get(TOKEN_HEADER) or "").strip()
+    if custom.lower().startswith("bearer "):
+        custom = custom.split(" ", 1)[1].strip()
+    user = _load(custom)
     if user:
         return user
     header = request.headers.get("Authorization") or ""
