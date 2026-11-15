@@ -2379,7 +2379,7 @@
       );
     }
 
-    if (navidromeReady() && (local || track.navidromeId || String(track.id || "").startsWith("nd:"))) {
+    if (navidromeReady()) {
       actions.push(
         element("button", {
           class: "action",
@@ -3000,11 +3000,26 @@
     }
     const candidates = data.candidates || [];
     if (!candidates.length) {
+      const canImport = navidromeReady() && track.id && !String(track.id).startsWith("nd:");
       openSheet(heading, [
         element("p", {
           class: "muted",
-          text: "Keine Cover gefunden. Album- und Interpretname prüfen oder den Titel zuerst nach Navidrome laden.",
+          text: "Keine Cover gefunden. Den Titel zuerst nach Navidrome laden: ⋯ → Herunterladen → Playlist oder „nur Bibliothek“. Danach hier erneut Cover wählen.",
         }),
+        canImport
+          ? element("button", {
+              type: "button",
+              class: "action primary",
+              text: "Nach Navidrome herunterladen …",
+              onclick: () => {
+                closeSheet();
+                openDownloadSheet(track);
+              },
+            })
+          : element("p", {
+              class: "muted",
+              text: "Unter Konfig Navidrome verbinden, dann den Titel über Herunterladen in die Bibliothek legen.",
+            }),
       ]);
       return;
     }

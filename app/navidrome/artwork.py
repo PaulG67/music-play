@@ -103,22 +103,28 @@ def _itunes_covers(artist: str, album: str) -> list[dict]:
     try:
         response = httpx.get(
             "https://itunes.apple.com/search",
-            params={"term": query, "entity": "album", "limit": 8},
+            params={
+                "term": query,
+                "limit": 10,
+                "country": (settings.ytm_location or "DE")[:2].upper(),
+                "entity": "album",
+            },
             headers=_HEADERS,
             timeout=12.0,
         )
         response.raise_for_status()
         rows = response.json().get("results") or []
     except Exception as exc:
-        logger.debug("iTunes-Cover-Suche fehlgeschlagen: {}", exc)
+        logger.warning("iTunes-Cover-Suche fehlgeschlagen: {}", exc)
         return []
     found = []
     for row in rows:
-        art = str(row.get("artworkUrl100") or "")
+        art = str(row.get("artworkUrl100") or row.get("artworkUrl60") or "")
         if not art:
             continue
-        art = art.replace("100x100bb", "1200x1200bb").replace("100x100", "1200x1200")
-        name = row.get("collectionName") or album or "Album"
+        art = art.replace("100x100bb", "1200x1200bb").replace("60x60bb", "1200x1200bb")
+        art = art.replace("100x100", "1200x1200").replace("60x60", "1200x1200")
+        name = row.get("collectionName") or row.get("trackName") or album or "Album"
         found.append(_candidate(art, "iTunes", name))
     return [item for item in found if item]
 
@@ -137,7 +143,7 @@ def _deezer_covers(artist: str, album: str) -> list[dict]:
         response.raise_for_status()
         rows = response.json().get("data") or []
     except Exception as exc:
-        logger.debug("Deezer-Cover-Suche fehlgeschlagen: {}", exc)
+        logger.warning("Deezer-Cover-Suche fehlgeschlagen: {}", exc)
         return []
     found = []
     for row in rows:
@@ -149,11 +155,35 @@ def _deezer_covers(artist: str, album: str) -> list[dict]:
     return [item for item in found if item]
 
 
+def _video_id(track: dict) -> str:
+    for key in ("videoId", "id"):
+        value = str(track.get(key) or "").strip()
+        if value and not value.startswith("nd:") and ":" not in value and len(value) >= 8:
+            return value
+    return ""
+
+
+def _youtube_frame_covers(video_id: str) -> list[dict]:
+    if not video_id:
+        return []
+    found = []
+    for name, suffix in (
+        ("YouTube max", "maxresdefault.jpg"),
+        ("YouTube HQ", "hqdefault.jpg"),
+        ("YouTube SD", "sddefault.jpg"),
+    ):
+        found.append(_candidate(f"https://i.ytimg.com/vi/{video_id}/{suffix}", "YouTube", name))
+    return [item for item in found if item]
+
+
 def _youtube_covers(track: dict) -> list[dict]:
     found = []
-    thumb = mapper.upscale_thumbnail(track.get("thumbnail"), 1200) if track.get("thumbnail") else None
+    thumb = track.get("thumbnail") or ""
     if thumb and not str(thumb).startswith("/"):
-        found.append(_candidate(thumb, "YouTube Music", "Video-/Albumvorschaubild"))
+        scaled = mapper.upscale_thumbnail(thumb, 1200) or thumb
+        found.append(_candidate(scaled, "YouTube Music", "Aktuelles Vorschaubild"))
+    elif str(thumb).startswith("/api/"):
+        found.append(_candidate(str(thumb).split("?")[0], "Navidrome", "Aktuelles Navidrome-Cover"))
     album_id = track.get("albumId") or track.get("album_id")
     if album_id and not str(album_id).startswith("nd:"):
         try:
@@ -167,7 +197,7 @@ def _youtube_covers(track: dict) -> list[dict]:
         try:
             albums = ytm.search(query, scope="albums", limit=8) or []
         except Exception as exc:
-            logger.debug("YouTube-Album-Suche fehlgeschlagen: {}", exc)
+            logger.warning("YouTube-Album-Suche fehlgeschlagen: {}", exc)
             albums = []
         for album in albums:
             url = album.get("thumbnail")
@@ -179,16 +209,74 @@ def _youtube_covers(track: dict) -> list[dict]:
                         album.get("name") or album.get("title") or "Album",
                     )
                 )
+        try:
+            songs = ytm.search(query, scope="songs", limit=6) or []
+        except Exception:
+            songs = []
+        for song in songs:
+            url = song.get("thumbnail")
+            if url:
+                found.append(
+                    _candidate(
+                        mapper.upscale_thumbnail(url, 1200) or url,
+                        "YouTube Music",
+                        song.get("title") or "Titel",
+                    )
+                )
+    found.extend(_youtube_frame_covers(_video_id(track)))
     return [item for item in found if item]
 
 
+def _enrich_track(track: dict) -> dict:
+    data = dict(track or {})
+    video_id = _video_id(data)
+    if video_id:
+        data["videoId"] = video_id
+        try:
+            song = ytm.song(video_id)
+        except Exception:
+            song = None
+        if song:
+            data["title"] = data.get("title") or song.get("title") or ""
+            data["artist"] = data.get("artist") or song.get("artist") or ""
+            data["album"] = data.get("album") or (song.get("album") if isinstance(song.get("album"), str) else "") or ""
+            data["album_id"] = data.get("album_id") or data.get("albumId") or song.get("album_id")
+            data["thumbnail"] = data.get("thumbnail") or song.get("thumbnail") or ""
+    nd_id = str(data.get("navidromeId") or nd_ids.unwrap(data.get("id")) or "")
+    if nd_id:
+        data["navidromeId"] = nd_id
+        try:
+            with NavidromeClient() as client:
+                song = client.get_song(nd_id)
+        except Exception:
+            song = None
+        if song:
+            data["title"] = data.get("title") or song.get("title") or ""
+            data["artist"] = data.get("artist") or song.get("artist") or ""
+            data["album"] = data.get("album") or song.get("album") or ""
+            data["path"] = data.get("path") or song.get("path") or ""
+            data["thumbnail"] = data.get("thumbnail") or song.get("thumbnail") or ""
+        with session_scope() as session:
+            link = repo.navidrome_link_by_song(session, nd_id)
+        if link:
+            data["videoId"] = data.get("videoId") or link.get("video_id") or ""
+            data["title"] = data.get("title") or link.get("title") or ""
+            data["artist"] = data.get("artist") or link.get("artist") or ""
+            data["path"] = data.get("path") or link.get("path") or ""
+    return data
+
+
 def search_covers(track: dict) -> list[dict]:
-    artist = str(track.get("artist") or "").strip()
-    album = str(track.get("album") or "").strip()
+    data = _enrich_track(track)
+    artist = str(data.get("artist") or "").strip()
+    album = str(data.get("album") or "").strip()
+    title = str(data.get("title") or "").strip()
     items = []
-    items.extend(_youtube_covers(track))
-    items.extend(_itunes_covers(artist, album or str(track.get("title") or "")))
-    items.extend(_deezer_covers(artist, album or str(track.get("title") or "")))
+    items.extend(_youtube_covers(data))
+    items.extend(_itunes_covers(artist, album or title))
+    if artist and title and album != title:
+        items.extend(_itunes_covers(artist, title))
+    items.extend(_deezer_covers(artist, album or title))
     unique = []
     seen = set()
     for item in items:
@@ -209,6 +297,10 @@ def _fetch_image(url: str) -> tuple[bytes, str]:
         nested = (parse_qs(parsed.query).get("u") or [""])[0]
         if nested:
             raw = nested
+    if raw.startswith("/api/navidrome/cover/"):
+        cover_id = raw.split("/api/navidrome/cover/", 1)[1].split("?", 1)[0]
+        with NavidromeClient() as client:
+            raw = client.cover_url(cover_id, 1200)
     if raw.startswith("/"):
         raise RuntimeError("Cover-URL nicht erreichbar")
     parsed = urlparse(raw)
