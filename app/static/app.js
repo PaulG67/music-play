@@ -415,33 +415,78 @@
     { id: "greeting", title: "Begrüßung", hint: "Guten Morgen / Guten Tag" },
     { id: "recent", title: "Zuletzt gehört" },
     { id: "frequent", title: "Am häufigsten gehört" },
-    { id: "foryou", title: "Für dich" },
   ];
 
-  function normalizeHome(raw) {
+  function slugTitle(title) {
+    const slug = String(title || "empfehlung")
+      .trim()
+      .toLowerCase()
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return slug || "empfehlung";
+  }
+
+  function ytmHomeBlocks(sections) {
+    const used = new Set();
+    return (sections || []).map((section, index) => {
+      let id = "ytm:" + slugTitle(section.title);
+      if (used.has(id)) id = `${id}-${index}`;
+      used.add(id);
+      return { id, title: section.title || "Empfehlung", items: section.items || [] };
+    });
+  }
+
+  function normalizeHome(raw, extras = null) {
     const data = raw && typeof raw === "object" ? raw : {};
     const saved = Array.isArray(data.layout) ? data.layout : [];
-    const byId = Object.fromEntries(saved.map((item) => [item.id, item]));
-    const known = new Set(HOME_BLOCK_DEFS.map((item) => item.id));
+    const extraList =
+      extras == null
+        ? saved
+            .filter((item) => String(item.id).startsWith("ytm:"))
+            .map((item) => ({
+              id: item.id,
+              title: (data.titles && data.titles[item.id]) || String(item.id).replace(/^ytm:/, ""),
+            }))
+        : extras.map((item) => ({ id: item.id, title: item.title }));
+    const defs = [...HOME_BLOCK_DEFS, ...extraList];
+    const known = new Set(defs.map((item) => item.id));
+    const titles = Object.fromEntries(defs.map((item) => [item.id, item.title]));
     const ordered = [];
     for (const item of saved) {
+      if (item.id === "foryou") {
+        for (const extra of extraList) {
+          if (ordered.some((entry) => entry.id === extra.id)) continue;
+          ordered.push({ id: extra.id, enabled: true });
+        }
+        continue;
+      }
       if (!known.has(item.id) || ordered.some((entry) => entry.id === item.id)) continue;
       ordered.push({ id: item.id, enabled: item.enabled !== false });
     }
-    for (const def of HOME_BLOCK_DEFS) {
+    for (const def of defs) {
       if (ordered.some((entry) => entry.id === def.id)) continue;
       ordered.push({ id: def.id, enabled: true });
     }
     const played = data.playlistLastPlayed && typeof data.playlistLastPlayed === "object" ? data.playlistLastPlayed : {};
     return {
       layout: ordered,
+      titles,
       playlistSort: data.playlistSort === "name" ? "name" : "recent",
       playlistLastPlayed: played,
     };
   }
 
   function homeDef(id) {
-    return HOME_BLOCK_DEFS.find((item) => item.id === id) || { id, title: id };
+    const core = HOME_BLOCK_DEFS.find((item) => item.id === id);
+    if (core) return core;
+    const title = state.home && state.home.titles && state.home.titles[id];
+    if (title) return { id, title };
+    if (String(id).startsWith("ytm:")) {
+      return { id, title: String(id).slice(4).replace(/-/g, " ") };
+    }
+    return { id, title: id };
   }
 
   function persistHome(immediate) {
@@ -775,22 +820,24 @@
     );
   }
 
-  function sectionsFragment(sections) {
-    const fragment = document.createDocumentFragment();
-    for (const section of sections || []) {
-      const items = section.items || [];
-      const songs = items.filter((item) => item.kind === "song");
-      const body =
-        songs.length === items.length && songs.length > 3
+  function sectionView(section) {
+    const items = (section && section.items) || [];
+    const songs = items.filter((item) => item.kind === "song");
+    const body =
+      !items.length
+        ? element("div", { class: "empty", text: "Keine Titel in diesem Block." })
+        : songs.length === items.length && songs.length > 3
           ? trackList(songs)
           : element("div", { class: "row" }, items.map(itemCard));
-      fragment.append(
-        element("div", { class: "section" }, [
-          element("div", { class: "section-head" }, [element("h2", { text: section.title })]),
-          body,
-        ])
-      );
-    }
+    return element("div", { class: "section" }, [
+      element("div", { class: "section-head" }, [element("h2", { text: (section && section.title) || "Empfehlung" })]),
+      body,
+    ]);
+  }
+
+  function sectionsFragment(sections) {
+    const fragment = document.createDocumentFragment();
+    for (const section of sections || []) fragment.append(sectionView(section));
     return fragment;
   }
 
@@ -884,7 +931,6 @@
   async function renderHome() {
     setTitle("Start");
     loading();
-    state.home = normalizeHome(state.home);
     const editing = Boolean(state.homeEditing);
     const [feed, library] = await Promise.all([
       api("/start").catch(() => api("/api/home")).catch(() => ({ sections: [] })),
@@ -892,7 +938,8 @@
     ]);
     const recent = library.recent || [];
     const frequent = library.most || [];
-    const ytmSections = feed.sections || [];
+    const ytm = ytmHomeBlocks(feed.sections || []);
+    state.home = normalizeHome(state.home, ytm);
 
     function blockBody(id) {
       if (id === "greeting") {
@@ -916,17 +963,10 @@
             : element("div", { class: "empty", text: "Sobald du öfter hörst, erscheinen hier deine Lieblingstitel." }),
         ]);
       }
-      if (id === "foryou") {
-        if (!ytmSections.length && !editing) return null;
-        if (!ytmSections.length) {
-          return element("div", { class: "section" }, [
-            element("h2", { text: "Für dich" }),
-            element("div", { class: "empty", text: "Keine Empfehlungen verfügbar. Nutze die Suche oder Entdecken." }),
-          ]);
-        }
-        const wrap = element("div", { class: "home-foryou" });
-        wrap.append(sectionsFragment(ytmSections));
-        return wrap;
+      const ytmBlock = ytm.find((item) => item.id === id);
+      if (ytmBlock) {
+        if (!ytmBlock.items.length && !editing) return null;
+        return sectionView({ title: ytmBlock.title, items: ytmBlock.items });
       }
       return null;
     }
