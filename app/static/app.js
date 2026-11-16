@@ -2463,6 +2463,52 @@
     );
   }
 
+  function loginGateSettings(status) {
+    const loginOn = status.loginRequired !== false && !status.needsSetup;
+    return configCard(
+      "App-Anmeldung",
+      "Wenn der Reverse-Proxy (Authelia, Authentik, NPM) schon schützt, kannst du das Music-Play-Login ausmachen. Dann kommt jeder durch, der den Proxy passiert – als Admin-Konto.",
+      ICONS.lock,
+      [
+        element("label", { class: "switch" }, [
+          element("input", {
+            type: "checkbox",
+            checked: loginOn ? "checked" : null,
+            onchange: async (event) => {
+              const enabled = event.target.checked;
+              const ok = enabled
+                ? confirm("App-Anmeldung wieder einschalten? Beim nächsten Öffnen ohne gespeicherte Session erscheint das Login.")
+                : confirm("App-Anmeldung ausschalten? Der Reverse-Proxy muss den Zugriff schützen. Music Play lässt dann jeden durch, der die URL erreicht.");
+              if (!ok) {
+                event.target.checked = !enabled;
+                return;
+              }
+              try {
+                const data = await api("/api/auth/login-required", {
+                  method: "PUT",
+                  body: { enabled },
+                });
+                state.passwordRequired = !!data.loginRequired;
+                toast(data.loginRequired ? "App-Anmeldung ist an" : "App-Anmeldung aus – Proxy schützt");
+                render(state.route, true);
+              } catch (error) {
+                event.target.checked = !enabled;
+                toast(error.message);
+              }
+            },
+          }),
+          element("span", { text: "Benutzer-Login in der App verlangen" }),
+        ]),
+        element("p", {
+          class: "muted",
+          text: loginOn
+            ? "Aktuell: Login in Music Play. Benutzername und Passwort wie unter Zugang."
+            : "Aktuell: kein App-Login. Zugriff nur über den Proxy.",
+        }),
+      ]
+    );
+  }
+
   function usersAdminSettings(users) {
     const items = users || [];
     return configCard(
@@ -2615,12 +2661,16 @@
     showView(gen,
       pageHead("Konfiguration", "Dein Zugang, dein Navidrome. Admins legen weitere Benutzer an."),
       element("div", { class: "config-summary" }, [
-        connectionPill(Boolean(status.passwordRequired), status.passwordRequired ? "Zugang" : "Kein Zugang"),
+        connectionPill(
+          Boolean(status.loginRequired !== false && !status.needsSetup),
+          status.needsSetup ? "Zugang einrichten" : status.loginRequired === false ? "Proxy-Auth" : "Zugang"
+        ),
         connectionPill(Boolean(nd.configured && nd.reachable), nd.configured && nd.reachable ? "Navidrome" : "Navidrome aus"),
         connectionPill(Boolean(ms.configured && ms.reachable), ms.configured && ms.reachable ? "MediaSync" : "MediaSync aus"),
       ]),
       element("div", { class: "config-grid" }, [
         accountSettings(status),
+        status.isAdmin ? loginGateSettings(status) : null,
         navidromeSettings(status),
         status.isAdmin ? usersAdminSettings(users.users) : null,
         mediasyncSettings(status),
@@ -4309,7 +4359,7 @@
       const hint = await api("/auth/hint").catch(() => api("/api/login-hint")).catch(() => ({ username: "musicplay" }));
       if ($("login-user") && !$("login-user").value) $("login-user").value = hint.username || "";
       showAuthScreen(
-        session.passwordRequired ? "login" : "setup",
+        session.needsSetup || !session.passwordRequired ? "setup" : "login",
         failed ? "Benutzername oder Passwort falsch." : undefined
       );
       return;

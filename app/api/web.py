@@ -60,10 +60,10 @@ def _clear_login_failures(request: Request) -> None:
 
 
 def _require_session(request: Request) -> str:
-    username = getattr(request.state, "session_user", None)
+    username = getattr(request.state, "session_user", None) or auth_store.resolve_user(None)
     if username:
         return username
-    if not auth_store.password_required():
+    if auth_store.needs_setup():
         raise HTTPException(status_code=401, detail="Zugang einrichten")
     raise HTTPException(status_code=401, detail="Nicht angemeldet")
 
@@ -152,10 +152,13 @@ def _decorate(items: list[dict], kind: str | None = None) -> list[dict]:
 
 @router.get("/login-hint")
 async def login_hint():
-    required = auth_store.password_required()
+    setup = auth_store.needs_setup()
+    required = auth_store.login_required() and not setup
     return {
         "username": "" if required else (auth_store.username() or "musicplay"),
         "passwordRequired": required,
+        "needsSetup": setup,
+        "loginRequired": auth_store.login_required() and not setup,
         "version": APP_VERSION,
     }
 
@@ -173,13 +176,16 @@ def _clear_session_cookie(response: Response) -> None:
 
 
 def _session_payload(user: str | None) -> dict:
-    required = auth_store.password_required()
-    record = auth_store.get_user(user) if user else None
+    setup = auth_store.needs_setup()
+    login_on = (not setup) and auth_store.login_required()
+    effective = user or (auth_store.username() if not setup and not login_on else None)
+    record = auth_store.get_user(effective) if effective else None
     return {
-        "authenticated": bool(user),
-        "passwordRequired": required,
-        "needsSetup": not required,
-        "user": user or (auth_store.username() if not required else None),
+        "authenticated": bool(effective) and not setup,
+        "passwordRequired": login_on,
+        "needsSetup": setup,
+        "loginRequired": login_on,
+        "user": effective,
         "isAdmin": bool(record and record.get("role") == "admin"),
         "version": APP_VERSION,
         "ytmAccount": ytm.is_authenticated(),
@@ -205,7 +211,7 @@ async def login(request: Request):
         str(payload.get("username") or payload.get("mp_username") or "")
     )
     password = str(payload.get("password") or payload.get("mp_password") or "")
-    if not auth_store.password_required():
+    if auth_store.needs_setup():
         detail = "Zuerst unter Zugang ein Passwort setzen."
         if wants_json:
             raise HTTPException(status_code=401, detail=detail)
@@ -267,7 +273,7 @@ async def save_account(request: Request, response: Response, payload: dict = Bod
 
     wanted = web_session.clean_secret(payload.get("username") or "")
     try:
-        if not auth_store.password_required():
+        if auth_store.needs_setup():
             user = auth_store.ensure_setup_user(wanted or "musicplay", new_password)
         else:
             current = _require_session(request)
@@ -336,6 +342,26 @@ async def delete_user(request: Request, username: str):
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
+
+
+@router.put("/auth/login-required")
+async def set_login_required(request: Request, payload: dict = Body(...)):
+    _require_admin(request)
+    if "enabled" not in payload and "loginRequired" not in payload:
+        raise HTTPException(status_code=400, detail="enabled fehlt")
+    enabled = payload.get("enabled")
+    if enabled is None:
+        enabled = payload.get("loginRequired")
+    if isinstance(enabled, str):
+        enabled = enabled.strip().lower() not in {"0", "false", "off", "no"}
+    login_on = auth_store.set_login_required(bool(enabled))
+    logger.info("App-Anmeldung {}", "an" if login_on else "aus (Proxy)")
+    return {
+        "ok": True,
+        "loginRequired": login_on,
+        "passwordRequired": login_on,
+        "needsSetup": auth_store.needs_setup(),
+    }
 
 
 # --------------------------------------------------------------------------
@@ -895,7 +921,9 @@ async def status(request: Request):
         "streamMode": settings.stream_mode,
         "subsonicUser": user,
         "isAdmin": auth_store.is_admin(user),
-        "passwordRequired": auth_store.password_required(),
+        "passwordRequired": (not auth_store.needs_setup()) and auth_store.login_required(),
+        "loginRequired": (not auth_store.needs_setup()) and auth_store.login_required(),
+        "needsSetup": auth_store.needs_setup(),
         "translation": {
             "enabled": settings.translation_enabled,
             "provider": settings.translate_provider,

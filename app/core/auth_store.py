@@ -17,7 +17,8 @@ from app.core.settings import CONFIG_DIR, clean_secret, settings
 
 AUTH_FILE = CONFIG_DIR / "auth.json"
 _lock = threading.Lock()
-_cache: dict | None = None
+_cache: list | None = None
+_login_required: bool = True
 
 
 def _env_password() -> str:
@@ -110,29 +111,45 @@ def _legacy_user(loaded: dict) -> dict:
 
 
 def _write_unlocked(users: list[dict]) -> None:
-    payload = {"users": [_dump_user(user) for user in users]}
+    payload = {
+        "login_required": bool(_login_required),
+        "users": [_dump_user(user) for user in users],
+    }
     secret_box.write_private_file(AUTH_FILE, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
 
 
+def _parse_login_required(loaded: dict) -> bool:
+    if "login_required" not in loaded:
+        return True
+    value = loaded.get("login_required")
+    if isinstance(value, str):
+        return value.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(value)
+
+
 def _read_unlocked() -> list[dict]:
-    global _cache
+    global _cache, _login_required
     if _cache is not None:
         return [dict(user) for user in _cache]
 
     users: list[dict] = []
     migrate = not AUTH_FILE.exists()
+    login_flag = True
     if AUTH_FILE.exists():
         try:
             loaded = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
             if isinstance(loaded, dict) and isinstance(loaded.get("users"), list):
                 users = [_normalize_user(item, admin=index == 0) for index, item in enumerate(loaded["users"]) if isinstance(item, dict)]
+                login_flag = _parse_login_required(loaded)
                 if any(secret_box.needs_migration(str((item.get("password") or ""))) for item in loaded["users"] if isinstance(item, dict)):
                     migrate = True
             elif isinstance(loaded, dict) and loaded.get("username"):
                 users = [_legacy_user(loaded)]
+                login_flag = _parse_login_required(loaded)
                 migrate = True
         except (OSError, json.JSONDecodeError, TypeError):
             migrate = True
+    _login_required = login_flag
 
     if not users:
         seeded = _env_password()
@@ -370,13 +387,48 @@ def password_hash() -> str:
     return (user or {}).get("password_hash") or ""
 
 
+def needs_setup() -> bool:
+    return not any(user.get("password") or user.get("password_hash") for user in load_users())
+
+
+def login_required() -> bool:
+    """False after an admin turns off in-app login (proxy already authenticates)."""
+    load_users()
+    return bool(_login_required)
+
+
+def allows_anonymous() -> bool:
+    return not needs_setup() and not login_required()
+
+
+def resolve_user(session_user: str | None) -> str | None:
+    if session_user:
+        return session_user
+    if allows_anonymous():
+        return username()
+    return None
+
+
+def set_login_required(enabled: bool) -> bool:
+    global _login_required, _cache
+    with _lock:
+        users = _read_unlocked()
+        _login_required = bool(enabled)
+        _write_unlocked(users)
+        _cache = [dict(item) for item in users]
+        return _login_required
+
+
 def password_required() -> bool:
-    return any(user.get("password") or user.get("password_hash") for user in load_users())
+    """True when Music Play / Subsonic must check a password."""
+    if needs_setup():
+        return False
+    return login_required()
 
 
 def save(username_value: str, password_value: str) -> dict:
     """Compatibility helper used by first-run and single-user settings."""
-    if not password_required():
+    if needs_setup():
         return ensure_setup_user(username_value, password_value)
     return save_user(username_value, password=password_value, new_username=username_value)
 

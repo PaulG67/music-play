@@ -33,7 +33,7 @@ def secrets_equal(left: str | None, right: str | None) -> bool:
 
 
 def check_password(username: str, password: str) -> bool:
-    if not auth_store.password_required():
+    if auth_store.needs_setup() or auth_store.allows_anonymous():
         return True
     return auth_store.verify(username, password)
 

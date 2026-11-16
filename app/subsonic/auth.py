@@ -48,8 +48,15 @@ def authenticate(request: Request, params: ParamSource) -> str:
     if not username and session_user:
         return session_user
 
-    if not auth_store.password_required():
-        return username or auth_store.username()
+    if auth_store.allows_anonymous() or not auth_store.password_required():
+        if username:
+            named = auth_store.get_user(username)
+            if named:
+                return _accept(request, named)
+        admin = auth_store.get_user(auth_store.username())
+        if admin:
+            return _accept(request, admin)
+        return auth_store.username()
 
     if not username:
         raise SubsonicError(ERROR_MISSING_PARAM, "Erforderlicher Parameter 'u' fehlt")

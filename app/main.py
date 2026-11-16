@@ -32,7 +32,7 @@ async def lifespan(_: FastAPI):
         APP_VERSION,
         auth_store.username(),
         settings.stream_mode,
-        "gesetzt" if auth_store.password_required() else "offen",
+        "Proxy" if auth_store.allows_anonymous() else ("gesetzt" if auth_store.password_required() else "offen"),
         "verbunden" if navidrome_config.configured() else "aus",
     )
     token = nd_context.bind(auth_store.navidrome_credentials(auth_store.username()))
@@ -55,7 +55,7 @@ async def attach_session(request: Request, call_next):
     proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
     if proto in {"http", "https"}:
         request.scope["scheme"] = proto
-    request.state.session_user = web_session.read(request)
+    request.state.session_user = auth_store.resolve_user(web_session.read(request))
     token = nd_context.bind(auth_store.navidrome_credentials(request.state.session_user))
     try:
         response = await call_next(request)
