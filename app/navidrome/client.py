@@ -227,9 +227,41 @@ class NavidromeClient:
         }
 
     def get_song(self, song_id: str) -> dict | None:
-        body = self._rest("getSong", {"id": song_id})
-        raw = body.get("song")
-        return map_song(raw) if raw else None
+        mapped = None
+        try:
+            body = self._rest("getSong", {"id": song_id})
+            raw = body.get("song")
+            mapped = map_song(raw) if raw else None
+        except NavidromeError as exc:
+            logger.debug("getSong (Subsonic): {}", exc)
+        native = self._native_song(song_id)
+        if native:
+            native_path = str(native.get("path") or "").strip()
+            if mapped is None:
+                mapped = map_song(native)
+            if native_path:
+                mapped["filePath"] = native_path
+                if not mapped.get("path"):
+                    mapped["path"] = native_path
+        return mapped
+
+    def _native_song(self, song_id: str) -> dict | None:
+        song_id = (song_id or "").strip()
+        headers = self._native_headers()
+        if not song_id or not headers:
+            return None
+        try:
+            response = self._http.get(
+                f"{self.base}/api/song/{song_id}",
+                headers=headers,
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            logger.debug("Navidrome /api/song/{} nicht lesbar: {}", song_id, exc)
+            return None
+        return payload if isinstance(payload, dict) else None
 
     def get_album(self, album_id: str) -> dict | None:
         body = self._rest("getAlbum", {"id": album_id})

@@ -489,7 +489,10 @@ def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None
 
     dest = artwork.resolve_audio_path({**song, "navidromeId": nd_id})
     if dest is None or not dest.is_file():
-        raise RuntimeError("Audiodatei in der Navidrome-Quelle nicht gefunden")
+        raise RuntimeError(
+            "Audiodatei in der Navidrome-Quelle nicht gefunden. "
+            f"Musikordner muss dieselbe Freigabe wie Navidrome sein ({config.music_dir()})."
+        )
 
     tmp_dir = settings.audio_cache_dir / "quality"
     tmp_dir.mkdir(parents=True, exist_ok=True)

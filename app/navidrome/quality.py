@@ -455,17 +455,27 @@ def replace_via_mediasync(navidrome_id: str, candidate: dict) -> dict:
         raise RuntimeError("Titel nicht in Navidrome gefunden")
 
     dest = artwork.resolve_audio_path({**song, "navidromeId": nd_id})
+    rel = artwork.library_relative_path({**song, "navidromeId": nd_id}, dest)
+    if not rel and dest is not None:
+        rel = _library_rel_path(dest)
+    if not rel:
+        raise RuntimeError(
+            "Audiodatei in der Navidrome-Quelle nicht gefunden. "
+            f"Musikordner prüfen: {config.music_dir()}."
+        )
     if dest is None or not dest.is_file():
-        raise RuntimeError("Audiodatei in der Navidrome-Quelle nicht gefunden")
-
-    rel = _library_rel_path(dest)
-    artist = (song.get("artist") or candidate.get("artist") or "").strip()
-    title = (song.get("title") or candidate.get("title") or "").strip()
-    snapshot = (
-        dest.stat().st_mtime,
-        dest.stat().st_size,
-        int(song.get("bitrate") or 0),
-    )
+        dest = config.music_dir() / rel
+        snapshot = (0.0, 0, int(song.get("bitrate") or 0))
+        logger.warning(
+            "Navidrome-Datei lokal nicht sichtbar, MediaSync bekommt relativen Pfad {}",
+            rel,
+        )
+    else:
+        snapshot = (
+            dest.stat().st_mtime,
+            dest.stat().st_size,
+            int(song.get("bitrate") or 0),
+        )
     source = str(candidate.get("source") or "")
     wait_s = 720 if source == "musikat" else 300
     logger.info("Ersetze {} über MediaSync ({})", dest, source)

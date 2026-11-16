@@ -24,7 +24,21 @@ from app.navidrome.client import NavidromeClient
 from app.ytm import client as ytm
 from app.ytm import mapper
 
-_AUDIO = {".m4a", ".mp4", ".mp3", ".flac", ".ogg", ".opus", ".aac"}
+_AUDIO = {
+    ".m4a",
+    ".mp4",
+    ".mp3",
+    ".flac",
+    ".ogg",
+    ".opus",
+    ".aac",
+    ".wav",
+    ".wma",
+    ".aiff",
+    ".aif",
+    ".ape",
+    ".alac",
+}
 _HEADERS = {"User-Agent": f"MusicPlay/{APP_VERSION} (https://github.com/PaulG67/music-play)"}
 _MB_HEADERS = {
     "User-Agent": f"MusicPlay/{APP_VERSION} ( https://github.com/PaulG67/music-play )",
@@ -45,6 +59,68 @@ def _inside_library(path: Path) -> bool:
         return False
 
 
+def _posix(value: Path | str) -> str:
+    return str(value or "").replace("\\", "/").strip()
+
+
+def library_relative_path(track: dict, dest: Path | None = None) -> str:
+    """Relative path under the shared music folder (for MediaSync / Navidrome)."""
+    if dest is not None:
+        try:
+            return dest.resolve().relative_to(_music_root()).as_posix()
+        except (ValueError, OSError):
+            pass
+    for raw in (track.get("filePath"), track.get("path")):
+        relative = _reported_to_relative(raw)
+        if relative:
+            return relative
+    return dest.name if dest is not None else ""
+
+
+def _reported_to_relative(raw: object) -> str:
+    text = _posix(raw)
+    if not text:
+        return ""
+    if re.match(r"^[A-Za-z]:/", text):
+        text = text[2:]
+    lowered = text.casefold()
+    for marker in ("/music/", "/musik/"):
+        index = lowered.rfind(marker)
+        if index >= 0:
+            return text[index + len(marker) :].lstrip("/")
+    host = _posix(settings.navidrome_music_host).rstrip("/")
+    if host and (text == host or text.startswith(host + "/")):
+        return text[len(host) :].lstrip("/")
+    root = _posix(config.music_dir()).rstrip("/")
+    if root and (text == root or text.startswith(root + "/")):
+        return text[len(root) :].lstrip("/")
+    if not text.startswith("/") and not text.startswith("mnt/"):
+        return text.lstrip("./")
+    return ""
+
+
+def _mapped_audio_options(path: Path, root: Path) -> list[Path]:
+    options = [path]
+    text = _posix(path)
+    relative = _reported_to_relative(text)
+    if relative:
+        options.append(root / relative)
+    if not path.is_absolute():
+        options.append(root / path)
+    host = _posix(settings.navidrome_music_host).rstrip("/")
+    if host and text.startswith(host + "/"):
+        options.append(root / text[len(host) + 1 :])
+    parts = Path(text).parts
+    folded = [part.casefold() for part in parts]
+    for folder in ("music", "musik"):
+        if folder in folded:
+            index = folded.index(folder)
+            if index + 1 < len(parts):
+                options.append(root.joinpath(*parts[index + 1 :]))
+            break
+    return options
+
+
 def resolve_audio_path(track: dict) -> Path | None:
     """Locate the file on disk for a downloaded / Navidrome track."""
     from app.navidrome import importer
@@ -59,8 +135,10 @@ def resolve_audio_path(track: dict) -> Path | None:
         try:
             with NavidromeClient() as client:
                 song = client.get_song(nd_id)
-            if song and song.get("path"):
-                candidates.append(Path(str(song["path"])))
+            if song:
+                for key in ("filePath", "path"):
+                    if song.get(key):
+                        candidates.append(Path(str(song[key])))
         except Exception as exc:
             logger.debug("Song-Pfad von Navidrome nicht lesbar: {}", exc)
 
@@ -78,16 +156,7 @@ def resolve_audio_path(track: dict) -> Path | None:
     root = _music_root()
     seen: set[str] = set()
     for path in candidates:
-        options = [path]
-        if not path.is_absolute():
-            options.append(root / path)
-        elif str(path).startswith("/music/") and root != Path("/music"):
-            options.append(root / str(path).lstrip("/").split("/", 1)[-1])
-        host = (settings.navidrome_music_host or "").rstrip("/")
-        text = str(path).replace("\\", "/")
-        if host and text.startswith(host + "/"):
-            options.append(root / text[len(host) + 1 :])
-        for option in options:
+        for option in _mapped_audio_options(path, root):
             try:
                 resolved = option.resolve()
             except OSError:
@@ -96,7 +165,12 @@ def resolve_audio_path(track: dict) -> Path | None:
             if key in seen:
                 continue
             seen.add(key)
-            if resolved.is_file() and resolved.suffix.lower() in _AUDIO and _inside_library(resolved):
+            audio = resolved.is_file() and (
+                resolved.suffix.lower() in _AUDIO or not resolved.suffix
+            )
+            if audio and (_inside_library(resolved) or resolved.is_file()):
+                if not _inside_library(resolved):
+                    logger.warning("Audiodatei außerhalb von {}: {}", root, resolved)
                 return resolved
     return _guess_audio_path(track)
 
@@ -111,6 +185,7 @@ def _guess_audio_path(track: dict) -> Path | None:
     folders = []
     if artist and album:
         folders.append(root / artist / album)
+        folders.append(config.import_root() / artist / album)
     if artist:
         artist_dir = root / artist
         if artist_dir.is_dir():
