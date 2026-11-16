@@ -663,6 +663,7 @@ async def read_settings(request: Request):
     return {
         "player": stored.get("player", {}),
         "equalizer": stored.get("equalizer", {}),
+        "home": stored.get("home", {}),
         "translationAvailable": settings.translation_enabled,
         "translationLanguage": settings.translate_language,
         "sponsorblock": settings.sponsorblock_enabled,
@@ -673,7 +674,7 @@ async def read_settings(request: Request):
 @router.put("/settings/{key}")
 async def write_settings(request: Request, key: str, payload: dict = Body(...)):
     _require_session(request)
-    if key not in ("player", "equalizer"):
+    if key not in ("player", "equalizer", "home"):
         raise HTTPException(status_code=400, detail="Unbekannter Einstellungsbereich")
     with session_scope() as session:
         repo.set_setting(session, key, payload)

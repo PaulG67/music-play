@@ -120,6 +120,8 @@
     navidrome: null,
     mediasync: null,
     online: navigator.onLine,
+    home: null,
+    homeEditing: false,
   };
 
   const PLACEHOLDER =
@@ -361,7 +363,7 @@
   function fillSidebarPlaylists(playlists) {
     const box = $("sidebar-playlist-list");
     if (!box) return;
-    const items = playlists || [];
+    const items = sortPlaylistEntries(playlists || [], (state.home && state.home.playlistSort) || "recent");
     state.sidebarPlaylists = items;
     box.replaceChildren(
       ...items.map((playlist) =>
@@ -409,10 +411,91 @@
     return "Guten Abend";
   }
 
-  function pageHead(title, subtitle) {
+  const HOME_BLOCK_DEFS = [
+    { id: "greeting", title: "Begrüßung", hint: "Guten Morgen / Guten Tag" },
+    { id: "recent", title: "Zuletzt gehört" },
+    { id: "frequent", title: "Am häufigsten gehört" },
+    { id: "foryou", title: "Für dich" },
+  ];
+
+  function normalizeHome(raw) {
+    const data = raw && typeof raw === "object" ? raw : {};
+    const saved = Array.isArray(data.layout) ? data.layout : [];
+    const byId = Object.fromEntries(saved.map((item) => [item.id, item]));
+    const known = new Set(HOME_BLOCK_DEFS.map((item) => item.id));
+    const ordered = [];
+    for (const item of saved) {
+      if (!known.has(item.id) || ordered.some((entry) => entry.id === item.id)) continue;
+      ordered.push({ id: item.id, enabled: item.enabled !== false });
+    }
+    for (const def of HOME_BLOCK_DEFS) {
+      if (ordered.some((entry) => entry.id === def.id)) continue;
+      ordered.push({ id: def.id, enabled: true });
+    }
+    const played = data.playlistLastPlayed && typeof data.playlistLastPlayed === "object" ? data.playlistLastPlayed : {};
+    return {
+      layout: ordered,
+      playlistSort: data.playlistSort === "name" ? "name" : "recent",
+      playlistLastPlayed: played,
+    };
+  }
+
+  function homeDef(id) {
+    return HOME_BLOCK_DEFS.find((item) => item.id === id) || { id, title: id };
+  }
+
+  function persistHome() {
+    clearTimeout(persistHome.timer);
+    persistHome.timer = setTimeout(() => {
+      api("/api/settings/home", { method: "PUT", body: state.home }).catch(() => {});
+    }, 250);
+  }
+
+  function playlistMemoryKey(entry) {
+    if (!entry) return "";
+    if (entry.source === "liked" || entry.cover === "liked" || entry.route?.name === "liked") return "liked";
+    const source = entry.source || entry.route?.name || "local";
+    const mapped =
+      source === "playlist" || source === "local"
+        ? "local"
+        : source === "nplaylist" || source === "navidrome"
+          ? "navidrome"
+          : source === "ytplaylist" || source === "youtube"
+            ? "youtube"
+            : source;
+    const id = entry.id || entry.route?.id;
+    if (!id) return mapped === "liked" ? "liked" : "";
+    return `${mapped}:${id}`;
+  }
+
+  function rememberPlaylistPlay(entry) {
+    const key = typeof entry === "string" ? entry : playlistMemoryKey(entry);
+    if (!key) return;
+    state.home = normalizeHome(state.home);
+    state.home.playlistLastPlayed[key] = Date.now();
+    persistHome();
+  }
+
+  function sortPlaylistEntries(items, mode) {
+    const copy = (items || []).slice();
+    if (mode === "name") {
+      return copy.sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "de", { sensitivity: "base" }));
+    }
+    const played = (state.home && state.home.playlistLastPlayed) || {};
+    return copy.sort((a, b) => {
+      const delta = (played[playlistMemoryKey(b)] || 0) - (played[playlistMemoryKey(a)] || 0);
+      if (delta) return delta;
+      return String(a.name || "").localeCompare(String(b.name || ""), "de", { sensitivity: "base" });
+    });
+  }
+
+  function pageHead(title, subtitle, extra) {
     return element("div", { class: "page-head" }, [
-      element("h1", { text: title }),
-      subtitle ? element("p", { text: subtitle }) : null,
+      element("div", { class: "page-head-main" }, [
+        element("h1", { text: title }),
+        subtitle ? element("p", { text: subtitle }) : null,
+      ]),
+      extra || null,
     ]);
   }
 
@@ -497,7 +580,13 @@
   // ------------------------------------------------------------- components
 
   function trackRow(track, list, position, options = {}) {
-    const row = element("button", { class: "track", onclick: () => Player.play(list, position) }, [
+    const row = element("button", {
+      class: "track",
+      onclick: () => {
+        if (options.playlist) rememberPlaylistPlay(options.playlist);
+        Player.play(list, position);
+      },
+    }, [
       element("span", { class: "track-index", text: String(position + 1) }),
       cover(track.thumbnail, 40),
       element("div", { class: "track-text" }, [
@@ -697,7 +786,18 @@
     return fragment;
   }
 
-  function playAllHeader(title, subtitle, thumbnail, tracks, extras = [], kind = "Sammlung") {
+  function playAllHeader(title, subtitle, thumbnail, tracks, extras = [], kind = "Sammlung", playlistMeta = null) {
+    function start(shuffle) {
+      if (!tracks.length) return;
+      if (playlistMeta) rememberPlaylistPlay(playlistMeta);
+      if (shuffle) {
+        Player.shuffle = true;
+        Player.play(tracks, Math.floor(Math.random() * tracks.length));
+        toast("Zufallswiedergabe an");
+        return;
+      }
+      Player.play(tracks, 0);
+    }
     return element("div", { class: "hero" }, [
       cover(thumbnail, 232),
       element("div", { class: "hero-meta" }, [
@@ -709,17 +809,12 @@
             class: "btn-play",
             "aria-label": "Abspielen",
             html: PLAY_ICON,
-            onclick: () => tracks.length && Player.play(tracks, 0),
+            onclick: () => start(false),
           }),
           element("button", {
             class: "btn-ghost",
             text: "Mischen",
-            onclick: () => {
-              if (!tracks.length) return;
-              Player.shuffle = true;
-              Player.play(tracks, Math.floor(Math.random() * tracks.length));
-              toast("Zufallswiedergabe an");
-            },
+            onclick: () => start(true),
           }),
           element("button", {
             class: "btn-ghost",
@@ -740,18 +835,148 @@
 
   // ------------------------------------------------------------------ views
 
+  function bindHomeReorder(container) {
+    container.querySelectorAll(".home-block-handle").forEach((handle) => {
+      handle.addEventListener("pointerdown", (event) => {
+        const block = handle.closest(".home-block");
+        if (!block) return;
+        event.preventDefault();
+        handle.setPointerCapture(event.pointerId);
+        block.classList.add("is-dragging");
+        const onMove = (moveEvent) => {
+          const siblings = [...container.querySelectorAll(".home-block")];
+          const prev = block.previousElementSibling;
+          const next = block.nextElementSibling;
+          if (prev && moveEvent.clientY < prev.getBoundingClientRect().top + prev.offsetHeight / 2) {
+            container.insertBefore(block, prev);
+          } else if (next && moveEvent.clientY > next.getBoundingClientRect().top + next.offsetHeight / 2) {
+            container.insertBefore(next, block);
+          }
+        };
+        const onUp = () => {
+          handle.releasePointerCapture(event.pointerId);
+          handle.removeEventListener("pointermove", onMove);
+          handle.removeEventListener("pointerup", onUp);
+          handle.removeEventListener("pointercancel", onUp);
+          block.classList.remove("is-dragging");
+          state.home.layout = [...container.querySelectorAll(".home-block")].map((node) => ({
+            id: node.dataset.id,
+            enabled: node.dataset.enabled !== "false",
+          }));
+          persistHome();
+        };
+        handle.addEventListener("pointermove", onMove);
+        handle.addEventListener("pointerup", onUp);
+        handle.addEventListener("pointercancel", onUp);
+      });
+    });
+  }
+
   async function renderHome() {
     setTitle("Start");
     loading();
-    const data = await api("/start").catch(() => api("/api/home"));
-    if (!data.sections.length) {
-      $("view").replaceChildren(
-        pageHead(greeting(), "Für dich zusammengestellt"),
-        element("div", { class: "empty", text: "Keine Empfehlungen verfügbar. Nutze die Suche oder Entdecken." })
-      );
-      return;
+    state.home = normalizeHome(state.home);
+    const editing = Boolean(state.homeEditing);
+    const [feed, library] = await Promise.all([
+      api("/start").catch(() => api("/api/home")).catch(() => ({ sections: [] })),
+      api("/api/favorites").catch(() => ({ recent: [], most: [] })),
+    ]);
+    const recent = library.recent || [];
+    const frequent = library.most || [];
+    const ytmSections = feed.sections || [];
+
+    function blockBody(id) {
+      if (id === "greeting") {
+        return pageHead(greeting(), "Für dich zusammengestellt");
+      }
+      if (id === "recent") {
+        if (!recent.length && !editing) return null;
+        return element("div", { class: "section" }, [
+          element("div", { class: "section-head" }, [element("h2", { text: "Zuletzt gehört" })]),
+          recent.length
+            ? trackList(recent.slice(0, 12))
+            : element("div", { class: "empty", text: "Noch nichts gehört – starte einen Titel." }),
+        ]);
+      }
+      if (id === "frequent") {
+        if (!frequent.length && !editing) return null;
+        return element("div", { class: "section" }, [
+          element("div", { class: "section-head" }, [element("h2", { text: "Am häufigsten gehört" })]),
+          frequent.length
+            ? trackList(frequent.slice(0, 12))
+            : element("div", { class: "empty", text: "Sobald du öfter hörst, erscheinen hier deine Lieblingstitel." }),
+        ]);
+      }
+      if (id === "foryou") {
+        if (!ytmSections.length && !editing) return null;
+        if (!ytmSections.length) {
+          return element("div", { class: "section" }, [
+            element("h2", { text: "Für dich" }),
+            element("div", { class: "empty", text: "Keine Empfehlungen verfügbar. Nutze die Suche oder Entdecken." }),
+          ]);
+        }
+        const wrap = element("div", { class: "home-foryou" });
+        wrap.append(sectionsFragment(ytmSections));
+        return wrap;
+      }
+      return null;
     }
-    $("view").replaceChildren(pageHead(greeting(), "Für dich zusammengestellt"), sectionsFragment(data.sections));
+
+    const editButton = element("button", {
+      class: `chip${editing ? " solid" : ""}`,
+      text: editing ? "Fertig" : "Bearbeiten",
+      onclick: () => {
+        state.homeEditing = !editing;
+        renderHome();
+      },
+    });
+
+    const stack = element("div", { class: "home-stack" });
+    for (const block of state.home.layout) {
+      const enabled = block.enabled !== false;
+      if (!enabled && !editing) continue;
+      const body = blockBody(block.id);
+      if (!body && !editing) continue;
+      const shell = element("section", {
+        class: `home-block${enabled ? "" : " is-off"}`,
+        "data-id": block.id,
+        "data-enabled": enabled ? "true" : "false",
+      });
+      if (editing) {
+        shell.append(
+          element("div", { class: "home-block-toolbar" }, [
+            element("button", {
+              class: "home-block-handle",
+              type: "button",
+              "aria-label": "Verschieben",
+              text: "↕",
+            }),
+            element("strong", { text: homeDef(block.id).title }),
+            element("button", {
+              class: "chip",
+              text: enabled ? "Ausblenden" : "Einblenden",
+              onclick: () => {
+                block.enabled = !enabled;
+                persistHome();
+                renderHome();
+              },
+            }),
+          ])
+        );
+      }
+      if (body) shell.append(body);
+      else if (editing) shell.append(element("div", { class: "empty", text: "Leerer Block" }));
+      stack.append(shell);
+    }
+
+    $("view").replaceChildren(
+      element("div", { class: "home-toolbar" }, [
+        element("span", { class: "home-toolbar-label", text: editing ? "Blöcke ziehen und ein- oder ausblenden" : "" }),
+        editButton,
+      ]),
+      stack
+    );
+    if (editing) bindHomeReorder(stack);
   }
 
   function renderSearch() {
@@ -1092,7 +1317,8 @@
         playlist.thumbnail,
         tracks,
         extras,
-        "Playlist"
+        "Playlist",
+        { source: "local", id: playlistId, name: playlist.name }
       ),
       trackList(tracks, { playlist: { source: "local", id: playlistId, name: playlist.name } })
     );
@@ -1104,7 +1330,15 @@
     setTitle(playlist.name);
     const tracks = playlist.tracks || [];
     $("view").replaceChildren(
-      playAllHeader(playlist.name, `${tracks.length} Titel`, playlist.thumbnail, tracks, [], "Playlist"),
+      playAllHeader(
+        playlist.name,
+        `${tracks.length} Titel`,
+        playlist.thumbnail,
+        tracks,
+        [],
+        "Playlist",
+        { source: "navidrome", id: playlistId, name: playlist.name }
+      ),
       trackList(tracks, { playlist: { source: "navidrome", id: playlistId, name: playlist.name } })
     );
   }
@@ -1138,8 +1372,18 @@
     });
 
     $("view").replaceChildren(
-      playAllHeader(playlist.name, `${tracks.length} Titel`, playlist.thumbnail, tracks, [copy], "Playlist"),
-      tracks.length ? trackList(tracks) : element("div", { class: "empty", text: "Keine Titel in dieser Playlist." })
+      playAllHeader(
+        playlist.name,
+        `${tracks.length} Titel`,
+        playlist.thumbnail,
+        tracks,
+        [copy],
+        "Playlist",
+        { source: "youtube", id: playlistId, name: playlist.name }
+      ),
+      tracks.length
+        ? trackList(tracks, { playlist: { source: "youtube", id: playlistId, name: playlist.name } })
+        : element("div", { class: "empty", text: "Keine Titel in dieser Playlist." })
     );
   }
 
@@ -1226,6 +1470,7 @@
         toast("Playlist ist leer");
         return;
       }
+      rememberPlaylistPlay(entry);
       Player.play(tracks, 0);
     } catch (error) {
       toast(error.message || "Playlist nicht ladbar");
@@ -1292,8 +1537,8 @@
     const favorites = await api("/api/favorites");
     const tracks = favorites.songs || [];
     $("view").replaceChildren(
-      playAllHeader("Lieblingstitel", `${tracks.length} Titel`, null, tracks, [], "Playlist"),
-      tracks.length ? trackList(tracks) : element("div", { class: "empty", text: "Noch keine Favoriten." })
+      playAllHeader("Lieblingstitel", `${tracks.length} Titel`, null, tracks, [], "Playlist", { source: "liked" }),
+      tracks.length ? trackList(tracks, { playlist: { source: "liked" } }) : element("div", { class: "empty", text: "Noch keine Favoriten." })
     );
     const heroImg = $("view").querySelector(".hero img");
     if (heroImg) {
@@ -1368,7 +1613,8 @@
     function paint() {
       const filter = renderPlaylistsHub.filter;
       const query = (renderPlaylistsHub.query || "").trim().toLowerCase();
-      let items = catalog[filter] || catalog.all;
+      const sort = (state.home && state.home.playlistSort) || "recent";
+      let items = sortPlaylistEntries(catalog[filter] || catalog.all, sort);
       if (query) items = items.filter((item) => String(item.name || "").toLowerCase().includes(query));
 
       const tiles = [];
@@ -1460,6 +1706,27 @@
           })
         )
       ),
+      element("div", { class: "search-filters playlist-sort" }, [
+        element("span", { class: "sort-label", text: "Sortierung" }),
+        ...[
+          ["recent", "Zuletzt gehört"],
+          ["name", "Name"],
+        ].map(([key, label]) =>
+          element("button", {
+            class: `chip${((state.home && state.home.playlistSort) || "recent") === key ? " active" : ""}`,
+            text: label,
+            onclick: (event) => {
+              state.home = normalizeHome(state.home);
+              state.home.playlistSort = key;
+              persistHome();
+              event.currentTarget.parentElement.querySelectorAll(".chip").forEach((chip) => chip.classList.remove("active"));
+              event.currentTarget.classList.add("active");
+              fillSidebarPlaylists([...own, ...navidrome, ...youtube]);
+              paint();
+            },
+          })
+        ),
+      ]),
       results
     );
     paint();
@@ -3756,11 +4023,12 @@
 
     try {
       const stored = await api("/api/settings");
+      state.home = normalizeHome(stored.home);
       Player.updateSettings({ ...stored.player, ...stored.equalizer });
       syncVolumeUi();
       syncRateButton();
     } catch (error) {
-      /* defaults are fine */
+      state.home = normalizeHome(state.home);
     }
 
     await Promise.all([
