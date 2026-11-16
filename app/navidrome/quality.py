@@ -18,6 +18,11 @@ from app.ytm import streams
 _MAX_CANDIDATES = 14
 _PROBE_WORKERS = 6
 _LOSSLESS = 1411
+_PLACEHOLDER_ALBUMS = {"", "singles", "unknown", "unbekannt", "single", "various", "va"}
+_RELEASE_HINT = re.compile(
+    r"\b(flac|alac|wav|lossless|320|256|v0|kbps|web[- ]?rip|cdrip|album)\b",
+    re.IGNORECASE,
+)
 
 _SOURCE_LABELS = {
     "ytm": "YouTube Music",
@@ -77,6 +82,30 @@ def _same_song(track: dict, candidate: dict) -> bool:
     return nd_match.duration_close(track.get("duration"), candidate.get("duration"))
 
 
+def _album_status(expected: str, got: str) -> str:
+    left, right = nd_match.fold(expected), nd_match.fold(got)
+    if left in _PLACEHOLDER_ALBUMS or right in _PLACEHOLDER_ALBUMS:
+        return "unknown"
+    if left == right or left in right or right in left:
+        return "same"
+    return "other"
+
+
+def _annotate_match(option: dict, track: dict) -> None:
+    option["sameTitle"] = nd_match.titles_match(track.get("title") or "", option.get("title") or "")
+    option["sameArtist"] = nd_match.artists_match(track.get("artist") or "", option.get("artist") or "")
+    option["albumStatus"] = _album_status(track.get("album") or "", option.get("album") or "")
+    option["sameAlbum"] = option["albumStatus"] == "same"
+    option["sameDuration"] = nd_match.duration_close(track.get("duration"), option.get("duration"))
+
+
+def _looks_like_release(value: str) -> bool:
+    text = (value or "").strip()
+    if len(text) > 80:
+        return True
+    return bool(_RELEASE_HINT.search(text))
+
+
 def _collect_candidates(track: dict) -> list[dict]:
     artist = (track.get("artist") or "").strip()
     title = (track.get("title") or "").strip()
@@ -122,6 +151,7 @@ def _probe_item(item: dict) -> dict | None:
         "title": item.get("title") or probe.get("title") or "",
         "artist": item.get("artist") or "",
         "album": item.get("album") or "",
+        "detail": "",
         "duration": item.get("duration") or 0,
         "bitrate": int(probe["bitrate"]),
         "codec": codec,
@@ -184,13 +214,23 @@ def _option_from_mediasync(raw: dict, source: str, query_title: str, query_artis
     if source == "musikat" and not bitrate:
         bitrate, codec = 320, "MP3"
     video_id = str(raw.get("video_id") or "")
+    if source == "youtube":
+        song_title = query_title or title
+        release = (raw.get("video_title") or raw.get("release_title") or title).strip()
+    elif query_title and not nd_match.titles_match(query_title, title) and _looks_like_release(title):
+        song_title = query_title
+        release = (raw.get("release_title") or title).strip()
+    else:
+        song_title = title
+        release = (raw.get("release_title") or raw.get("video_title") or "").strip()
+    album = (raw.get("album") or "").strip()
     candidate = {
         "id": f"{source}:{video_id or raw.get('guid') or raw.get('index') or title}"[:120],
         "source": source,
         "source_label": _SOURCE_LABELS.get(source, source),
         "artist": artist,
-        "title": title if source != "youtube" else query_title,
-        "album": raw.get("album"),
+        "title": song_title,
+        "album": album,
         "score": score,
         "format": codec,
         "bitrate_label": f"{bitrate} kbps" if bitrate and bitrate < 1000 else codec,
@@ -214,14 +254,15 @@ def _option_from_mediasync(raw: dict, source: str, query_title: str, query_artis
             if key in raw and raw.get(key) is not None
         },
     }
-    detail = raw.get("release_title") or raw.get("video_title") or title
+    extra = release if release and nd_match.fold(release) != nd_match.fold(song_title) else ""
     return {
         "videoId": video_id,
         "source": source,
         "sourceLabel": _SOURCE_LABELS.get(source, source),
-        "title": detail,
+        "title": song_title,
         "artist": artist,
-        "album": raw.get("album") or "",
+        "album": album,
+        "detail": extra,
         "duration": raw.get("duration") or 0,
         "bitrate": bitrate,
         "codec": codec,
@@ -306,11 +347,13 @@ def search_quality(track: dict) -> dict:
         bitrate = int(option.get("bitrate") or 0)
         option["current"] = bool(current and abs(bitrate - current) <= 4)
         option["better"] = bool(current and bitrate > current)
+        _annotate_match(option, data)
 
     return {
         "title": title,
         "artist": artist,
         "album": data.get("album") or "",
+        "duration": data.get("duration") or 0,
         "bitrate": current,
         "navidromeId": _navidrome_id(data),
         "path": data.get("path") or "",

@@ -246,6 +246,59 @@
     return `${formatBitrate(bitrate)} · ${codec}`;
   }
 
+  function qualityIdentity(item) {
+    const title = item?.title || "Unbekannter Titel";
+    const artist = item?.artist || "";
+    return artist ? `${artist} – ${title}` : title;
+  }
+
+  function qualityAlbumStatus(option) {
+    if (option?.albumStatus) return option.albumStatus;
+    if (option?.sameAlbum) return "same";
+    if (option?.album) return "other";
+    return "unknown";
+  }
+
+  function qualityMatchKind(option) {
+    if (option.sameTitle === false) return "warn";
+    if (qualityAlbumStatus(option) === "other") return "other";
+    if (option.sameTitle && qualityAlbumStatus(option) === "same") return "same";
+    return "";
+  }
+
+  function qualityMatchLabel(option) {
+    const bits = [];
+    if (option.sameTitle === false) bits.push("anderer Titel");
+    else if (option.sameTitle) bits.push("gleicher Titel");
+    const album = qualityAlbumStatus(option);
+    if (album === "same") bits.push("gleiches Album");
+    else if (album === "other") bits.push("anderes Album");
+    if (option.sameArtist === false) bits.push("anderer Interpret");
+    if (option.sameDuration === false) bits.push("andere Länge");
+    return bits.join(" · ");
+  }
+
+  function qualityCurrentCard(data, track, bitrate) {
+    const current = {
+      title: data?.title || track.title || "",
+      artist: data?.artist || track.artist || "",
+      album: data?.album || track.album || "",
+      duration: data?.duration || track.duration || 0,
+    };
+    return element("div", { class: "quality-current" }, [
+      element("strong", { text: qualityIdentity(current) }),
+      element("span", {
+        text: [
+          current.album ? `Album: ${current.album}` : null,
+          current.duration ? formatTime(current.duration) : null,
+          `aktuell ${formatBitrate(bitrate)}`,
+        ]
+          .filter(Boolean)
+          .join(" · "),
+      }),
+    ]);
+  }
+
   function navidromeTrackId(track) {
     return String(track?.navidromeId || "").trim() || (String(track?.id || "").startsWith("nd:") ? String(track.id).slice(3) : "");
   }
@@ -3563,6 +3616,7 @@
     if (libraryBitrate) applyTrackBitrate(track, libraryBitrate);
     if (!options.length) {
       openSheet(heading, [
+        qualityCurrentCard(data, track, libraryBitrate),
         element("p", {
           class: "muted",
           text: data.query
@@ -3577,6 +3631,22 @@
       if (!ndId || !navidromeReady()) {
         toast("Nur Titel in Navidrome können ersetzt werden");
         return;
+      }
+      const current = {
+        title: data.title || track.title,
+        artist: data.artist || track.artist,
+        album: data.album || track.album || "",
+      };
+      if (option.sameTitle === false || qualityAlbumStatus(option) === "other") {
+        const confirmed = window.confirm(
+          [
+            "Bitte prüfen, ob das wirklich derselbe Titel ist.",
+            `Aktuell: ${qualityIdentity(current)}${current.album ? ` · ${current.album}` : ""}`,
+            `Treffer: ${qualityIdentity(option)}${option.album ? ` · ${option.album}` : ""}`,
+            "Trotzdem ersetzen?",
+          ].join("\n")
+        );
+        if (!confirmed) return;
       }
       openSheet(heading, [
         element("p", { class: "muted", text: `Ersetze durch ${formatQualityLabel(option)} …` }),
@@ -3614,14 +3684,17 @@
     };
 
     openSheet(heading, [
+      qualityCurrentCard(data, track, libraryBitrate),
       element("p", {
         class: "muted",
         text: ndId
-          ? `Aktuell ${formatBitrate(libraryBitrate)} in Navidrome. YouTube Music und MediaSync-Hub, sortiert nach Bitrate.`
-          : `Aktuell ${formatBitrate(libraryBitrate)}. Zum Ersetzen den Titel zuerst nach Navidrome legen.`,
+          ? "YouTube Music und MediaSync-Hub, sortiert nach Bitrate. Titel und Album vor dem Ersetzen prüfen."
+          : "Zum Ersetzen den Titel zuerst nach Navidrome legen.",
       }),
-      ...options.map((option) =>
-        element(
+      ...options.map((option) => {
+        const match = qualityMatchLabel(option);
+        const kind = qualityMatchKind(option);
+        return element(
           "button",
           {
             type: "button",
@@ -3631,11 +3704,25 @@
           [
             element("span", { class: "quality-option-text" }, [
               element("strong", { text: formatQualityLabel(option) }),
+              element("span", { text: qualityIdentity(option) }),
               element("span", {
-                text: [option.sourceLabel, option.title, option.duration ? formatTime(option.duration) : ""]
+                text: [
+                  option.album ? `Album: ${option.album}` : "Album unbekannt",
+                  option.duration ? formatTime(option.duration) : "",
+                  option.sourceLabel,
+                ]
                   .filter(Boolean)
                   .join(" · "),
               }),
+              match
+                ? element("span", {
+                    class: `quality-option-match${kind ? ` is-${kind}` : ""}`,
+                    text: match,
+                  })
+                : null,
+              option.detail
+                ? element("span", { class: "quality-option-detail", text: option.detail })
+                : null,
             ]),
             option.current
               ? element("span", { class: "quality-option-badge", text: "aktuell" })
@@ -3643,8 +3730,8 @@
                 ? element("span", { class: "quality-option-badge", text: "besser" })
                 : null,
           ]
-        )
-      ),
+        );
+      }),
     ]);
   }
 
