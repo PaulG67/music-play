@@ -200,6 +200,23 @@ async def library() -> dict:
         return {"configured": True, "error": str(exc), "albums": [], "playlists": [], "recent": [], "artists": []}
 
 
+async def playlist_catalog() -> dict:
+    """Playlists only — used by the download picker so the library scan cannot stall it."""
+    if not config.configured():
+        return {"configured": False, "playlists": []}
+
+    def load() -> list:
+        with NavidromeClient() as client:
+            return client.playlists()
+
+    try:
+        playlists = await run_in_threadpool(load)
+        return {"configured": True, "playlists": playlists}
+    except Exception as exc:
+        logger.warning("Navidrome-Playlists: {}", exc)
+        return {"configured": True, "error": str(exc), "playlists": []}
+
+
 async def search(query: str, limit: int = 20) -> dict:
     if not query.strip() or not config.configured():
         return {"songs": [], "albums": [], "artists": []}

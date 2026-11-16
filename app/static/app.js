@@ -154,6 +154,14 @@
     return raw || `Fehler ${status}`;
   }
 
+  function networkErrorMessage(error) {
+    const raw = String((error && error.message) || error || "");
+    if (/load failed|failed to fetch|networkerror|aborted|the operation was aborted|network request failed/i.test(raw)) {
+      return "Verbindung unterbrochen. Bitte erneut versuchen.";
+    }
+    return raw || "Netzwerkfehler";
+  }
+
   function isAuthPath(path) {
     const clean = (path || "").split("?")[0];
     return /(?:login-hint|\/login|\/logout|\/auth\/hint|\/me|\/api\/session)$/.test(clean);
@@ -169,12 +177,17 @@
     if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
     // Cookie first. Never send Authorization — proxies answer 403 Forbidden.
     if (token && !skipAuth && useTokenHeader) headers["X-Music-Play-Token"] = token;
-    const response = await fetch(path, {
-      credentials: "include",
-      headers,
-      method,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-    });
+    let response;
+    try {
+      response = await fetch(path, {
+        credentials: "include",
+        headers,
+        method,
+        body: options.body ? JSON.stringify(options.body) : undefined,
+      });
+    } catch (error) {
+      throw new Error(networkErrorMessage(error));
+    }
     if (response.status === 403 && !retrying && useTokenHeader) {
       return api(path, { ...options, _retried: true, _tokenHeader: false });
     }
@@ -3883,27 +3896,34 @@
 
     let mediaTargets = [];
     let navidromeLists = [];
-    try {
-      if (mediasyncReady()) mediaTargets = await loadMediaSyncTargets(true);
-    } catch (error) {
-      toast(error.message);
+    const pending = [];
+    if (mediasyncReady()) {
+      pending.push(
+        loadMediaSyncTargets(true)
+          .then((items) => {
+            mediaTargets = items;
+          })
+          .catch((error) => toast(networkErrorMessage(error)))
+      );
     }
-    try {
-      if (navidromeReady()) {
-        const library = await api("/api/navidrome/library");
-        if (library.error) toast(library.error);
-        navidromeLists = (library.playlists || [])
-          .map((playlist) => ({
-            id: String(playlist.navidromeId || playlist.id || "").replace(/^nd:/, ""),
-            name: playlist.name,
-            source: "navidrome",
-            kind: "playlist",
-          }))
-          .filter((playlist) => playlist.id && playlist.name);
-      }
-    } catch (error) {
-      toast(error.message);
+    if (navidromeReady()) {
+      pending.push(
+        api("/api/navidrome/playlists")
+          .then((library) => {
+            if (library.error) toast(library.error);
+            navidromeLists = (library.playlists || [])
+              .map((playlist) => ({
+                id: String(playlist.navidromeId || playlist.id || "").replace(/^nd:/, ""),
+                name: playlist.name,
+                source: "navidrome",
+                kind: "playlist",
+              }))
+              .filter((playlist) => playlist.id && playlist.name);
+          })
+          .catch((error) => toast(networkErrorMessage(error)))
+      );
     }
+    await Promise.all(pending);
 
     let last = {};
     try {

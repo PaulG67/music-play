@@ -1017,6 +1017,12 @@ async def navidrome_library(request: Request):
     return await navidrome.library()
 
 
+@router.get("/navidrome/playlists")
+async def list_navidrome_playlists(request: Request):
+    _require_session(request)
+    return await navidrome.playlist_catalog()
+
+
 @router.delete("/navidrome/playlist/{playlist_id}")
 async def delete_navidrome_playlist(request: Request, playlist_id: str):
     _require_session(request)

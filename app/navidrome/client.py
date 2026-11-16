@@ -234,6 +234,9 @@ class NavidromeClient:
             mapped = map_song(raw) if raw else None
         except NavidromeError as exc:
             logger.debug("getSong (Subsonic): {}", exc)
+        has_path = bool(mapped and (mapped.get("path") or mapped.get("filePath")))
+        if has_path:
+            return mapped
         native = self._native_song(song_id)
         if native:
             native_path = str(native.get("path") or "").strip()
@@ -253,10 +256,13 @@ class NavidromeClient:
         try:
             response = self._http.get(
                 f"{self.base}/api/song/{song_id}",
-                headers=headers,
-                timeout=15.0,
+                headers={**headers, "Accept": "application/json"},
+                timeout=8.0,
             )
             response.raise_for_status()
+            ctype = (response.headers.get("content-type") or "").lower()
+            if "json" not in ctype or len(response.content) > 1_000_000:
+                return None
             payload = response.json()
         except (httpx.HTTPError, ValueError) as exc:
             logger.debug("Navidrome /api/song/{} nicht lesbar: {}", song_id, exc)
@@ -312,7 +318,10 @@ class NavidromeClient:
                     by_id[playlist_id] = raw
         except NavidromeError as exc:
             logger.debug("getPlaylists (Subsonic): {}", exc)
-        for raw in self._native_playlists():
+        # Native list can hang (login + pagination). Use it only as fallback, or
+        # as a single extra page so the download picker stays fast.
+        native_limit = 2000 if not by_id else 100
+        for raw in self._native_playlists(timeout=8.0, page=100, limit=native_limit):
             playlist_id = str(raw.get("id") or "")
             if playlist_id:
                 by_id[playlist_id] = raw
@@ -320,20 +329,20 @@ class NavidromeClient:
         mapped.sort(key=lambda item: (item.get("name") or "").casefold())
         return mapped
 
-    def _native_playlists(self) -> list[dict]:
+    def _native_playlists(self, *, timeout: float = 10.0, page: int = 100, limit: int = 2000) -> list[dict]:
         headers = self._native_headers()
         if not headers:
             return []
         rows: list[dict] = []
+        seen: set[str] = set()
         start = 0
-        page = 100
-        while start < 10000:
+        while start < limit:
             try:
                 response = self._http.get(
                     f"{self.base}/api/playlist",
                     params={"_start": start, "_end": start + page},
-                    headers=headers,
-                    timeout=30.0,
+                    headers={**headers, "Accept": "application/json"},
+                    timeout=timeout,
                 )
                 response.raise_for_status()
                 batch = response.json()
@@ -343,10 +352,16 @@ class NavidromeClient:
                 break
             if not isinstance(batch, list) or not batch:
                 break
+            new_rows = 0
             for raw in batch:
+                playlist_id = str(raw.get("id") or "")
+                if not playlist_id or playlist_id in seen:
+                    continue
+                seen.add(playlist_id)
+                new_rows += 1
                 rows.append(
                     {
-                        "id": str(raw.get("id") or ""),
+                        "id": playlist_id,
                         "name": raw.get("name") or "",
                         "comment": raw.get("comment") or "",
                         "songCount": raw.get("songCount") or len(raw.get("tracks") or []) or 0,
@@ -355,7 +370,7 @@ class NavidromeClient:
                         "coverArt": raw.get("coverArtId") or raw.get("id"),
                     }
                 )
-            if len(batch) < page:
+            if new_rows == 0 or len(batch) < page:
                 break
             start += page
         logger.info("Navidrome-Playlists nativ: {}", len(rows))
@@ -515,6 +530,7 @@ class NavidromeClient:
                 f"{self.base}/auth/login",
                 json={"username": self.username, "password": self.password},
                 headers={"Content-Type": "application/json"},
+                timeout=8.0,
             )
             response.raise_for_status()
             payload = response.json()

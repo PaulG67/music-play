@@ -88,11 +88,22 @@ class MediaSyncClient:
 
     def targets(self) -> list[dict]:
         try:
-            payload = self._get("/api/ingest/targets").json()
+            response = self._http.get(
+                self._url("/api/ingest/targets"),
+                timeout=httpx.Timeout(5.0, read=10.0),
+            )
+            if response.status_code >= 400:
+                raise MediaSyncError(self._error(response), response.status_code)
+            payload = response.json()
             items = payload.get("targets") or []
             if items:
                 return items
-        except MediaSyncError:
+        except MediaSyncError as exc:
+            if exc.status_code not in (404, 405):
+                raise
+        except httpx.HTTPError as exc:
+            raise MediaSyncError(f"MediaSync Playlists nicht erreichbar: {exc}") from exc
+        except ValueError:
             pass
 
         # Older MediaSync: Jellyfin playlist list only.
@@ -175,19 +186,29 @@ class MediaSyncClient:
 
     def search_sources(self, artist: str, title: str, album: str = "") -> dict[str, dict]:
         """Query MusiKat, Usenet and YouTube in MediaSync-Hub (no download)."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         song = {"artist": artist or "", "title": title or "", "album": album or ""}
-        timeout = httpx.Timeout(15.0, read=90.0)
-        found: dict[str, dict] = {}
-        for path, key in (
+        timeout = httpx.Timeout(15.0, read=45.0)
+        queries = (
             ("/api/musikat/search", "musikat"),
             ("/api/usenet/search", "usenet"),
             ("/api/youtube/search", "youtube"),
-        ):
+        )
+
+        def one(path: str, key: str) -> tuple[str, dict]:
             try:
                 body = self._post(path, song, timeout=timeout).json()
-                found[key] = body if isinstance(body, dict) else {"tracks": []}
+                return key, body if isinstance(body, dict) else {"tracks": []}
             except Exception as exc:
-                found[key] = {"success": False, "tracks": [], "error": str(exc)}
+                return key, {"success": False, "tracks": [], "error": str(exc)}
+
+        found: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            futures = [pool.submit(one, path, key) for path, key in queries]
+            for future in as_completed(futures):
+                key, payload = future.result()
+                found[key] = payload
         return found
 
     def start_redownload(
