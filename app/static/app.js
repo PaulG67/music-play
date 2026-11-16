@@ -444,11 +444,19 @@
     return HOME_BLOCK_DEFS.find((item) => item.id === id) || { id, title: id };
   }
 
-  function persistHome() {
+  function persistHome(immediate) {
     clearTimeout(persistHome.timer);
-    persistHome.timer = setTimeout(() => {
-      api("/api/settings/home", { method: "PUT", body: state.home }).catch(() => {});
-    }, 250);
+    const save = () => api("/api/settings/home", { method: "PUT", body: state.home }).catch(() => {});
+    if (immediate) save();
+    else persistHome.timer = setTimeout(save, 250);
+  }
+
+  function setHomeBlockEnabled(id, enabled) {
+    state.home = normalizeHome(state.home);
+    state.home.layout = state.home.layout.map((item) =>
+      item.id === id ? { ...item, enabled: Boolean(enabled) } : item
+    );
+    persistHome(true);
   }
 
   function playlistMemoryKey(entry) {
@@ -859,11 +867,12 @@
           handle.removeEventListener("pointerup", onUp);
           handle.removeEventListener("pointercancel", onUp);
           block.classList.remove("is-dragging");
+          const previous = Object.fromEntries((state.home.layout || []).map((item) => [item.id, item]));
           state.home.layout = [...container.querySelectorAll(".home-block")].map((node) => ({
             id: node.dataset.id,
-            enabled: node.dataset.enabled !== "false",
+            enabled: previous[node.dataset.id] ? previous[node.dataset.id].enabled !== false : true,
           }));
-          persistHome();
+          persistHome(true);
         };
         handle.addEventListener("pointermove", onMove);
         handle.addEventListener("pointerup", onUp);
@@ -927,6 +936,7 @@
       text: editing ? "Fertig" : "Bearbeiten",
       onclick: () => {
         state.homeEditing = !editing;
+        persistHome(true);
         renderHome();
       },
     });
@@ -934,13 +944,12 @@
     const stack = element("div", { class: "home-stack" });
     for (const block of state.home.layout) {
       const enabled = block.enabled !== false;
-      if (!enabled && !editing) continue;
+      if (!editing && !enabled) continue;
       const body = blockBody(block.id);
-      if (!body && !editing) continue;
+      if (!editing && !body) continue;
       const shell = element("section", {
         class: `home-block${enabled ? "" : " is-off"}`,
         "data-id": block.id,
-        "data-enabled": enabled ? "true" : "false",
       });
       if (editing) {
         shell.append(
@@ -953,19 +962,20 @@
             }),
             element("strong", { text: homeDef(block.id).title }),
             element("button", {
-              class: "chip",
+              class: `chip home-block-toggle${enabled ? "" : " is-inactive"}`,
               text: enabled ? "Ausblenden" : "Einblenden",
               onclick: () => {
-                block.enabled = !enabled;
-                persistHome();
+                setHomeBlockEnabled(block.id, !enabled);
                 renderHome();
               },
             }),
           ])
         );
       }
-      if (body) shell.append(body);
-      else if (editing) shell.append(element("div", { class: "empty", text: "Leerer Block" }));
+      const wrapped = element("div", { class: "home-block-body" }, [
+        body || (editing ? element("div", { class: "empty", text: "Leerer Block" }) : null),
+      ]);
+      shell.append(wrapped);
       stack.append(shell);
     }
 
