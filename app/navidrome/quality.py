@@ -224,6 +224,17 @@ def _option_from_mediasync(raw: dict, source: str, query_title: str, query_artis
         song_title = title
         release = (raw.get("release_title") or raw.get("video_title") or "").strip()
     album = (raw.get("album") or "").strip()
+    extra = release if release and nd_match.fold(release) != nd_match.fold(song_title) else ""
+    match = {
+        key: value
+        for key, value in raw.items()
+        if value is not None and isinstance(value, (str, int, float, bool, dict, list))
+    }
+    if raw.get("index") is not None:
+        try:
+            match["index"] = int(raw["index"])
+        except (TypeError, ValueError):
+            pass
     candidate = {
         "id": f"{source}:{video_id or raw.get('guid') or raw.get('index') or title}"[:120],
         "source": source,
@@ -234,27 +245,8 @@ def _option_from_mediasync(raw: dict, source: str, query_title: str, query_artis
         "score": score,
         "format": codec,
         "bitrate_label": f"{bitrate} kbps" if bitrate and bitrate < 1000 else codec,
-        "match": {
-            key: raw.get(key)
-            for key in (
-                "url",
-                "video_id",
-                "guid",
-                "index",
-                "title",
-                "artist",
-                "channel",
-                "size",
-                "score",
-                "release_title",
-                "link",
-                "download_url",
-                "nzb_url",
-            )
-            if key in raw and raw.get(key) is not None
-        },
+        "match": match,
     }
-    extra = release if release and nd_match.fold(release) != nd_match.fold(song_title) else ""
     return {
         "videoId": video_id,
         "source": source,
@@ -387,6 +379,62 @@ def _wait_mediasync_job(client, job_id: str, timeout: int = 300) -> dict:
     raise RuntimeError("MediaSync braucht zu lange für den Download")
 
 
+def _mediasync_failure_text(payload: dict | None) -> str:
+    data = payload if isinstance(payload, dict) else {}
+    parts = [
+        data.get("error"),
+        data.get("message"),
+        data.get("reason"),
+        data.get("status"),
+    ]
+    nested = data.get("result")
+    if isinstance(nested, dict):
+        parts.extend([nested.get("error"), nested.get("reason"), nested.get("status")])
+    return " ".join(str(part) for part in parts if part).strip()
+
+
+def _recover_mediasync_replace(song: dict, dest, nd_id: str, snapshot: tuple) -> dict | None:
+    from app.navidrome import artwork
+    from app.navidrome.importer import _locate, _probe_file_bitrate, _wait_for_scan
+
+    mtime, size, old_bitrate = snapshot
+    with NavidromeClient() as client:
+        _wait_for_scan(client)
+        updated = client.get_song(nd_id)
+    found = _locate(song)
+    if updated is None and found:
+        updated = found
+        nd_id = str(found.get("id") or found.get("navidromeId") or nd_id)
+
+    changed = False
+    bitrate = old_bitrate
+    if dest.is_file():
+        stat = dest.stat()
+        bitrate = _probe_file_bitrate(dest) or bitrate
+        if stat.st_mtime > mtime + 0.4 or stat.st_size != size:
+            changed = True
+        if bitrate and old_bitrate and bitrate != old_bitrate:
+            changed = True
+    if updated and int(updated.get("bitrate") or 0) and int(updated.get("bitrate") or 0) != old_bitrate:
+        bitrate = int(updated.get("bitrate") or bitrate)
+        changed = True
+    if found:
+        other = artwork.resolve_audio_path(found)
+        if other is not None and dest.exists() and other.resolve() != dest.resolve() and other.is_file():
+            changed = True
+            bitrate = int(found.get("bitrate") or _probe_file_bitrate(other) or bitrate)
+
+    if not changed:
+        return None
+    return {
+        "navidromeId": nd_id,
+        "path": str(dest),
+        "bitrate": bitrate,
+        "title": (updated or song).get("title") or song.get("title") or "",
+        "artist": (updated or song).get("artist") or song.get("artist") or "",
+    }
+
+
 def replace_via_mediasync(navidrome_id: str, candidate: dict) -> dict:
     from app.mediasync import config as ms_config
     from app.mediasync.client import MediaSyncClient
@@ -411,9 +459,18 @@ def replace_via_mediasync(navidrome_id: str, candidate: dict) -> dict:
         raise RuntimeError("Audiodatei in der Navidrome-Quelle nicht gefunden")
 
     rel = _library_rel_path(dest)
-    artist = (candidate.get("artist") or song.get("artist") or "").strip()
-    title = (candidate.get("title") or song.get("title") or "").strip()
-    logger.info("Ersetze {} über MediaSync ({})", dest, candidate.get("source"))
+    artist = (song.get("artist") or candidate.get("artist") or "").strip()
+    title = (song.get("title") or candidate.get("title") or "").strip()
+    snapshot = (
+        dest.stat().st_mtime,
+        dest.stat().st_size,
+        int(song.get("bitrate") or 0),
+    )
+    source = str(candidate.get("source") or "")
+    wait_s = 720 if source == "musikat" else 300
+    logger.info("Ersetze {} über MediaSync ({})", dest, source)
+    outcome: dict = {}
+    failure = ""
     with MediaSyncClient() as client:
         started = client.start_redownload(
             rel,
@@ -426,12 +483,24 @@ def replace_via_mediasync(navidrome_id: str, candidate: dict) -> dict:
         if not job_id:
             outcome = started if started.get("success") is not None else started.get("result") or started
         else:
-            body = _wait_mediasync_job(client, job_id)
+            body = _wait_mediasync_job(client, job_id, timeout=wait_s)
             if str(body.get("status") or "").lower() == "error":
-                raise RuntimeError(body.get("error") or body.get("message") or "MediaSync-Download fehlgeschlagen")
-            outcome = body.get("result") or body
-        if isinstance(outcome, dict) and outcome.get("success") is False:
-            raise RuntimeError(outcome.get("reason") or outcome.get("error") or "MediaSync hat nichts heruntergeladen")
+                failure = _mediasync_failure_text(body) or "MediaSync-Download fehlgeschlagen"
+            else:
+                outcome = body.get("result") or body
+        if not failure and isinstance(outcome, dict) and outcome.get("success") is False:
+            failure = (
+                outcome.get("reason")
+                or outcome.get("error")
+                or "MediaSync hat nichts heruntergeladen"
+            )
+
+    if failure:
+        recovered = _recover_mediasync_replace(song, dest, nd_id, snapshot)
+        if recovered:
+            logger.info("MediaSync meldete Fehler, Datei wurde trotzdem ersetzt: {}", failure)
+            return recovered
+        raise RuntimeError(failure)
 
     time.sleep(2)
     bitrate = _probe_file_bitrate(dest) if dest.is_file() else 0
