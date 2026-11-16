@@ -552,7 +552,20 @@
     ]);
   }
 
-  function loading() {
+  let renderGen = 0;
+
+  function stale(gen) {
+    return gen !== renderGen;
+  }
+
+  function showView(gen, ...nodes) {
+    if (stale(gen)) return false;
+    $("view").replaceChildren(...nodes.filter((node) => node != null && node !== false));
+    return true;
+  }
+
+  function loading(gen) {
+    if (gen !== undefined && stale(gen)) return;
     $("view").replaceChildren(element("div", { class: "spinner", text: "Lädt …" }));
   }
 
@@ -610,17 +623,20 @@
   };
 
   async function render(route, forceReload) {
+    const gen = ++renderGen;
     const view = VIEWS[route.name] || renderHome;
     setActiveNav(route.name);
     try {
       await view(route, forceReload);
     } catch (exception) {
+      if (stale(gen)) return;
       const message = friendlyHttpError(0, exception.message);
       if (/blockiert|forbidden|403/i.test(String(exception.message || "") + message)) {
         showAuthScreen("login", message);
         return;
       }
-      $("view").replaceChildren(
+      showView(
+        gen,
         element("div", { class: "empty" }, [
           element("p", { text: message }),
           element("button", { class: "chip", text: "Erneut versuchen", onclick: () => render(route, true) }),
@@ -894,12 +910,11 @@
     container.querySelectorAll(".home-block-handle").forEach((handle) => {
       handle.addEventListener("pointerdown", (event) => {
         const block = handle.closest(".home-block");
-        if (!block) return;
+        if (!block || event.button) return;
         event.preventDefault();
-        handle.setPointerCapture(event.pointerId);
+        event.stopPropagation();
         block.classList.add("is-dragging");
         const onMove = (moveEvent) => {
-          const siblings = [...container.querySelectorAll(".home-block")];
           const prev = block.previousElementSibling;
           const next = block.nextElementSibling;
           if (prev && moveEvent.clientY < prev.getBoundingClientRect().top + prev.offsetHeight / 2) {
@@ -909,11 +924,11 @@
           }
         };
         const onUp = () => {
-          handle.releasePointerCapture(event.pointerId);
-          handle.removeEventListener("pointermove", onMove);
-          handle.removeEventListener("pointerup", onUp);
-          handle.removeEventListener("pointercancel", onUp);
+          window.removeEventListener("pointermove", onMove);
+          window.removeEventListener("pointerup", onUp);
+          window.removeEventListener("pointercancel", onUp);
           block.classList.remove("is-dragging");
+          if (!container.isConnected) return;
           const previous = Object.fromEntries((state.home.layout || []).map((item) => [item.id, item]));
           state.home.layout = [...container.querySelectorAll(".home-block")].map((node) => ({
             id: node.dataset.id,
@@ -921,21 +936,23 @@
           }));
           persistHome(true);
         };
-        handle.addEventListener("pointermove", onMove);
-        handle.addEventListener("pointerup", onUp);
-        handle.addEventListener("pointercancel", onUp);
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+        window.addEventListener("pointercancel", onUp);
       });
     });
   }
 
   async function renderHome() {
+    const gen = renderGen;
     setTitle("Start");
-    loading();
+    loading(gen);
     const editing = Boolean(state.homeEditing);
     const [feed, library] = await Promise.all([
       api("/start").catch(() => api("/api/home")).catch(() => ({ sections: [] })),
       api("/api/favorites").catch(() => ({ recent: [], most: [] })),
     ]);
+    if (stale(gen)) return;
     const recent = library.recent || [];
     const frequent = library.most || [];
     const ytm = ytmHomeBlocks(feed.sections || []);
@@ -1019,13 +1036,18 @@
       stack.append(shell);
     }
 
-    $("view").replaceChildren(
-      element("div", { class: "home-toolbar" }, [
-        element("span", { class: "home-toolbar-label", text: editing ? "Blöcke ziehen und ein- oder ausblenden" : "" }),
-        editButton,
-      ]),
-      stack
-    );
+    if (
+      !showView(
+        gen,
+        element("div", { class: "home-toolbar" }, [
+          element("span", { class: "home-toolbar-label", text: editing ? "Blöcke ziehen und ein- oder ausblenden" : "" }),
+          editButton,
+        ]),
+        stack
+      )
+    ) {
+      return;
+    }
     if (editing) bindHomeReorder(stack);
   }
 
@@ -1154,13 +1176,14 @@
       paintSearch(music, podcasts, "all");
     });
 
-    $("view").replaceChildren(pageHead("Suche", "Titel, Alben, Künstler und Playlists"), form, results);
+    showView(renderGen, pageHead("Suche", "Titel, Alben, Künstler und Playlists"), form, results);
     if (renderSearch.lastQuery) form.requestSubmit();
   }
 
   async function renderExplore() {
+    const gen = renderGen;
     setTitle("Entdecken");
-    loading();
+    loading(gen);
 
     const [explore, charts, moods, podcasts] = await Promise.all([
       api("/api/explore").catch(() => ({ sections: [] })),
@@ -1168,6 +1191,7 @@
       api("/api/moods").catch(() => ({ sections: [] })),
       api("/api/podcasts").catch(() => ({ subscribed: [], newEpisodes: [] })),
     ]);
+    if (stale(gen)) return;
 
     const fragment = document.createDocumentFragment();
     fragment.append(pageHead("Entdecken", "Vorschläge von YouTube Music"));
@@ -1224,18 +1248,20 @@
     ) {
       fragment.append(element("div", { class: "empty", text: "Nichts zu entdecken – prüfe die Verbindung." }));
     }
-    $("view").replaceChildren(fragment);
+    showView(gen, fragment);
   }
 
   async function renderMood(params, title) {
+    const gen = renderGen;
     setTitle(title || "Kategorie");
-    loading();
+    loading(gen);
     const data = await api("/api/mood", {
       method: "POST",
       body: { params: params || "", title: title || "" },
     });
+    if (stale(gen)) return;
     const items = data.playlists || [];
-    $("view").replaceChildren(
+    showView(gen,
       pageHead(title || "Kategorie", "Playlists von YouTube Music"),
       items.length
         ? element("div", { class: "grid" }, items.map(itemCard))
@@ -1244,8 +1270,10 @@
   }
 
   async function renderAlbum(albumId) {
-    loading();
+    const gen = renderGen;
+    loading(gen);
     const album = await api(`/api/album/${encodeURIComponent(albumId)}`);
+    if (stale(gen)) return;
     setTitle(album.name);
     const tracks = album.tracks || [];
 
@@ -1255,7 +1283,8 @@
       onclick: (event) => toggleFavorite(album.sid, event.currentTarget),
     });
 
-    $("view").replaceChildren(
+    showView(
+      gen,
       playAllHeader(
         album.name,
         [album.artist, album.year, `${tracks.length} Titel`].filter(Boolean).join(" · "),
@@ -1269,8 +1298,10 @@
   }
 
   async function renderArtist(artistId) {
-    loading();
+    const gen = renderGen;
+    loading(gen);
     const artist = await api(`/api/artist/${encodeURIComponent(artistId)}`);
+    if (stale(gen)) return;
     setTitle(artist.name);
 
     const top = artist.top_songs || [];
@@ -1311,12 +1342,14 @@
       );
     }
 
-    $("view").replaceChildren(fragment);
+    showView(gen, fragment);
   }
 
   async function renderPlaylist(playlistId) {
-    loading();
+    const gen = renderGen;
+    loading(gen);
     const playlist = await api(`/api/playlist/${playlistId}`);
+    if (stale(gen)) return;
     setTitle(playlist.name);
     const tracks = playlist.tracks || [];
 
@@ -1360,7 +1393,8 @@
       );
     }
 
-    $("view").replaceChildren(
+    showView(
+      gen,
       playAllHeader(
         playlist.name,
         `${tracks.length} Titel · ${formatDuration(playlist.duration)}`,
@@ -1375,11 +1409,14 @@
   }
 
   async function renderNavidromePlaylist(playlistId) {
-    loading();
+    const gen = renderGen;
+    loading(gen);
     const playlist = await api(`/api/navidrome/playlist/${encodeURIComponent(playlistId)}`);
+    if (stale(gen)) return;
     setTitle(playlist.name);
     const tracks = playlist.tracks || [];
-    $("view").replaceChildren(
+    showView(
+      gen,
       playAllHeader(
         playlist.name,
         `${tracks.length} Titel`,
@@ -1394,7 +1431,8 @@
   }
 
   async function renderYtPlaylist(playlistId, title) {
-    loading();
+    const gen = renderGen;
+    loading(gen);
     let playlist;
     try {
       playlist = await api(`/api/ytplaylist/${encodeURIComponent(playlistId)}`);
@@ -1406,6 +1444,7 @@
         throw error;
       }
     }
+    if (stale(gen)) return;
     setTitle(playlist.name || title || "Playlist");
     const tracks = playlist.tracks || [];
 
@@ -1421,7 +1460,8 @@
       },
     });
 
-    $("view").replaceChildren(
+    showView(
+      gen,
       playAllHeader(
         playlist.name,
         `${tracks.length} Titel`,
@@ -1438,8 +1478,10 @@
   }
 
   async function renderPodcast(podcastId) {
-    loading();
+    const gen = renderGen;
+    loading(gen);
     const show = await api(`/api/podcast/${encodeURIComponent(podcastId)}`);
+    if (stale(gen)) return;
     setTitle(show.title);
     const episodes = show.episodes || [];
 
@@ -1458,7 +1500,8 @@
       },
     });
 
-    $("view").replaceChildren(
+    showView(
+      gen,
       playAllHeader(show.title, `${show.author} · ${episodes.length} Episoden`, show.thumbnail, episodes, [subscribe], "Podcast"),
       show.description ? element("p", { class: "description", text: show.description }) : null,
       trackList(episodes, { subtitle: null })
@@ -1582,14 +1625,21 @@
   }
 
   async function renderLiked() {
+    const gen = renderGen;
     setTitle("Lieblingstitel");
-    loading();
+    loading(gen);
     const favorites = await api("/api/favorites");
+    if (stale(gen)) return;
     const tracks = favorites.songs || [];
-    $("view").replaceChildren(
-      playAllHeader("Lieblingstitel", `${tracks.length} Titel`, null, tracks, [], "Playlist", { source: "liked" }),
-      tracks.length ? trackList(tracks, { playlist: { source: "liked" } }) : element("div", { class: "empty", text: "Noch keine Favoriten." })
-    );
+    if (
+      !showView(
+        gen,
+        playAllHeader("Lieblingstitel", `${tracks.length} Titel`, null, tracks, [], "Playlist", { source: "liked" }),
+        tracks.length ? trackList(tracks, { playlist: { source: "liked" } }) : element("div", { class: "empty", text: "Noch keine Favoriten." })
+      )
+    ) {
+      return;
+    }
     const heroImg = $("view").querySelector(".hero img");
     if (heroImg) {
       const placeholder = element("div", {
@@ -1604,8 +1654,9 @@
   }
 
   async function renderPlaylistsHub() {
+    const gen = renderGen;
     setTitle("Playlists");
-    loading();
+    loading(gen);
 
     const [favorites, playlists, navidromeLibrary] = await Promise.all([
       api("/api/favorites").catch(() => ({ songs: [] })),
@@ -1619,6 +1670,7 @@
         };
       }),
     ]);
+    if (stale(gen)) return;
 
     const own = (playlists.playlists || []).map(localPlaylistEntry);
     const youtube = (playlists.account || []).map(youtubePlaylistEntry);
@@ -1711,7 +1763,8 @@
       youtube.length ? ["youtube", "YouTube Music"] : null,
     ].filter(Boolean);
 
-    $("view").replaceChildren(
+    showView(
+      gen,
       pageHead(
         "Playlists",
         ndConfigured
@@ -1783,14 +1836,16 @@
   }
 
   async function renderLibrary() {
+    const gen = renderGen;
     setTitle("Bibliothek");
-    loading();
+    loading(gen);
 
     const [favorites, playlists, navidromeLibrary] = await Promise.all([
       api("/api/favorites"),
       api("/api/playlists"),
       api("/api/navidrome/library").catch(() => ({ configured: false })),
     ]);
+    if (stale(gen)) return;
     const libraryPlaylists = playlists.playlists || [];
     const likedSongs = favorites.songs || [];
     const recentSongs = favorites.recent || [];
@@ -1850,13 +1905,15 @@
       );
     }
 
-    $("view").replaceChildren(fragment);
+    showView(gen, fragment);
   }
 
   async function renderOffline() {
+    const gen = renderGen;
     setTitle("Offline");
     const tracks = Offline.tracks();
     const usage = await Offline.usage();
+    if (stale(gen)) return;
 
     const fragment = document.createDocumentFragment();
     fragment.append(
@@ -1892,7 +1949,7 @@
       fragment.append(trackList(tracks));
     }
 
-    $("view").replaceChildren(fragment);
+    showView(gen, fragment);
   }
 
   function barChart(entries, valueKey = "plays") {
@@ -1913,14 +1970,14 @@
   }
 
   async function renderStats() {
+    const gen = renderGen;
     setTitle("Statistiken");
-    loading();
+    loading(gen);
     const data = await api("/api/stats?limit=10");
+    if (stale(gen)) return;
 
     if (!data.totalPlays) {
-      $("view").replaceChildren(
-        element("div", { class: "empty", text: "Noch keine Wiedergaben aufgezeichnet." })
-      );
+      showView(gen, element("div", { class: "empty", text: "Noch keine Wiedergaben aufgezeichnet." }));
       return;
     }
 
@@ -1961,7 +2018,7 @@
       );
     }
 
-    $("view").replaceChildren(fragment);
+    showView(gen, fragment);
   }
 
   function statTile(value, label) {
@@ -1972,16 +2029,18 @@
   }
 
   async function renderWrapped(year) {
+    const gen = renderGen;
     setTitle(`Rückblick ${year}`);
-    loading();
+    loading(gen);
     const data = await api(`/api/wrapped/${year}`);
+    if (stale(gen)) return;
 
     if (data.empty) {
-      $("view").replaceChildren(element("div", { class: "empty", text: `Keine Daten für ${year}.` }));
+      showView(gen, element("div", { class: "empty", text: `Keine Daten für ${year}.` }));
       return;
     }
 
-    $("view").replaceChildren(
+    showView(gen,
       element("div", { class: "wrapped" }, [
         element("h1", { text: `Dein Jahr ${year}` }),
         element("p", { class: "wrapped-lead", text: `${data.totalHours} Stunden Musik in ${data.totalPlays} Wiedergaben.` }),
@@ -2463,15 +2522,17 @@
   }
 
   async function renderSettings() {
+    const gen = renderGen;
     setTitle("Mehr");
-    loading();
+    loading(gen);
     const status = await api("/api/status");
+    if (stale(gen)) return;
     status.cache = status.cache || { tracks: 0, bytes: 0 };
     state.status = status;
     const nd = status.navidrome || {};
     const ms = status.mediasync || {};
 
-    $("view").replaceChildren(
+    showView(gen,
       pageHead("Mehr", "Wiedergabe, Verbindungen und Konto."),
       element("div", { class: "more-list" }, [
         moreRow(
@@ -2500,17 +2561,21 @@
   }
 
   async function renderConfig() {
+    const gen = renderGen;
     setTitle("Konfiguration");
-    loading();
+    loading(gen);
     const status = await api("/api/status");
+    if (stale(gen)) return;
     status.cache = status.cache || { tracks: 0, bytes: 0 };
     state.status = status;
     const usage = await Offline.usage();
+    if (stale(gen)) return;
     const nd = status.navidrome || {};
     const ms = status.mediasync || {};
     const users = status.isAdmin ? await api("/api/users").catch(() => ({ users: [] })) : { users: [] };
+    if (stale(gen)) return;
 
-    $("view").replaceChildren(
+    showView(gen,
       pageHead("Konfiguration", "Dein Zugang, dein Navidrome. Admins legen weitere Benutzer an."),
       element("div", { class: "config-summary" }, [
         connectionPill(Boolean(status.passwordRequired), status.passwordRequired ? "Zugang" : "Kein Zugang"),
