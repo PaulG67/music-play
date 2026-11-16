@@ -350,5 +350,18 @@ def search_quality(track: dict) -> dict:
     return nd_quality.search_quality(track)
 
 
-def replace_quality(navidrome_id: str, video_id: str, format_id: str | None = None) -> dict:
-    return start_replace_job(navidrome_id, video_id, format_id)
+def replace_quality(
+    navidrome_id: str,
+    video_id: str = "",
+    format_id: str | None = None,
+    *,
+    source: str = "ytm",
+    candidate: dict | None = None,
+) -> dict:
+    return start_replace_job(
+        navidrome_id,
+        video_id,
+        format_id,
+        source=source,
+        candidate=candidate,
+    )

@@ -51,8 +51,11 @@ class MediaSyncClient:
             raise MediaSyncError(self._error(response), response.status_code)
         return response
 
-    def _post(self, path: str, payload: dict) -> httpx.Response:
-        response = self._http.post(self._url(path), json=payload)
+    def _post(self, path: str, payload: dict, *, timeout: httpx.Timeout | None = None) -> httpx.Response:
+        kwargs = {"json": payload}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        response = self._http.post(self._url(path), **kwargs)
         if response.status_code >= 400:
             raise MediaSyncError(self._error(response), response.status_code)
         return response
@@ -169,3 +172,47 @@ class MediaSyncClient:
                 "result": None,
             },
         }
+
+    def search_sources(self, artist: str, title: str, album: str = "") -> dict[str, dict]:
+        """Query MusiKat, Usenet and YouTube in MediaSync-Hub (no download)."""
+        song = {"artist": artist or "", "title": title or "", "album": album or ""}
+        timeout = httpx.Timeout(15.0, read=90.0)
+        found: dict[str, dict] = {}
+        for path, key in (
+            ("/api/musikat/search", "musikat"),
+            ("/api/usenet/search", "usenet"),
+            ("/api/youtube/search", "youtube"),
+        ):
+            try:
+                body = self._post(path, song, timeout=timeout).json()
+                found[key] = body if isinstance(body, dict) else {"tracks": []}
+            except Exception as exc:
+                found[key] = {"success": False, "tracks": [], "error": str(exc)}
+        return found
+
+    def start_redownload(
+        self,
+        path: str,
+        artist: str,
+        title: str,
+        selected_candidate: dict,
+        playlist_item_id: str | None = None,
+    ) -> dict:
+        payload = {
+            "path": path,
+            "artist": artist or "",
+            "title": title or "",
+            "selected_candidate": selected_candidate,
+            "playlist_item_id": playlist_item_id or "",
+        }
+        response = self._http.post(
+            self._url("/api/song-check/redownload"),
+            json=payload,
+            timeout=httpx.Timeout(15.0, read=60.0),
+        )
+        if response.status_code >= 400 and response.status_code != 202:
+            raise MediaSyncError(self._error(response), response.status_code)
+        return response.json() if response.content else {}
+
+    def song_check_job(self, job_id: str) -> dict:
+        return self._get(f"/api/song-check/jobs/{job_id}").json()

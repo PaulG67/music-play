@@ -237,6 +237,15 @@
     return value > 0 ? `${Math.round(value)} kbit/s` : "—";
   }
 
+  function formatQualityLabel(option) {
+    const codec = String(option?.codec || "Audio");
+    const bitrate = Number(option?.bitrate) || 0;
+    if (["FLAC", "ALAC", "WAV"].includes(codec.toUpperCase()) || bitrate >= 1000) {
+      return `${codec.toUpperCase()} · verlustfrei`;
+    }
+    return `${formatBitrate(bitrate)} · ${codec}`;
+  }
+
   function navidromeTrackId(track) {
     return String(track?.navidromeId || "").trim() || (String(track?.id || "").startsWith("nd:") ? String(track.id).slice(3) : "");
   }
@@ -3520,15 +3529,20 @@
         return;
       }
       openSheet(heading, [
-        element("p", { class: "muted", text: `Ersetze durch ${formatBitrate(option.bitrate)} …` }),
+        element("p", { class: "muted", text: `Ersetze durch ${formatQualityLabel(option)} …` }),
       ]);
       try {
         const result = await api("/api/navidrome/quality/replace", {
           method: "POST",
           body: {
             navidromeId: ndId,
-            videoId: option.videoId,
+            videoId: option.videoId || "",
             formatId: option.formatId || "",
+            source: option.source || "ytm",
+            candidate: option.candidate || null,
+            path: data.path || track.path || "",
+            title: track.title,
+            artist: track.artist,
           },
         });
         const jobs = await waitForJobs(result.job ? [result.job] : result.jobs || []);
@@ -3553,7 +3567,7 @@
       element("p", {
         class: "muted",
         text: ndId
-          ? `Aktuell ${formatBitrate(libraryBitrate)} in Navidrome. Antippen ersetzt die Datei.`
+          ? `Aktuell ${formatBitrate(libraryBitrate)} in Navidrome. YouTube Music und MediaSync-Hub, sortiert nach Bitrate.`
           : `Aktuell ${formatBitrate(libraryBitrate)}. Zum Ersetzen den Titel zuerst nach Navidrome legen.`,
       }),
       ...options.map((option) =>
@@ -3566,9 +3580,11 @@
           },
           [
             element("span", { class: "quality-option-text" }, [
-              element("strong", { text: `${formatBitrate(option.bitrate)} · ${option.codec || "Audio"}` }),
+              element("strong", { text: formatQualityLabel(option) }),
               element("span", {
-                text: [option.title, option.duration ? formatTime(option.duration) : ""].filter(Boolean).join(" · "),
+                text: [option.sourceLabel, option.title, option.duration ? formatTime(option.duration) : ""]
+                  .filter(Boolean)
+                  .join(" · "),
               }),
             ]),
             option.current

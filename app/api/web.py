@@ -1156,11 +1156,22 @@ async def navidrome_quality_replace(request: Request, payload: dict = Body(...))
     navidrome_id = str(payload.get("navidromeId") or nd_ids.unwrap(payload.get("id")) or "").strip()
     video_id = str(payload.get("videoId") or "").strip()
     format_id = str(payload.get("formatId") or "").strip() or None
+    source = str(payload.get("source") or "ytm").strip().lower() or "ytm"
+    candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else None
     if not navidrome_id:
         raise HTTPException(status_code=400, detail="Titel ist nicht in Navidrome")
-    if not video_id or video_id.startswith("nd:"):
+    if source in {"musikat", "usenet", "youtube"}:
+        if not candidate:
+            raise HTTPException(status_code=400, detail="MediaSync-Treffer fehlt")
+    elif not video_id or video_id.startswith("nd:"):
         raise HTTPException(status_code=400, detail="videoId fehlt")
-    job = navidrome.replace_quality(navidrome_id, video_id, format_id)
+    job = navidrome.replace_quality(
+        navidrome_id,
+        video_id,
+        format_id,
+        source=source,
+        candidate=candidate,
+    )
     return {"job": job}
 
 

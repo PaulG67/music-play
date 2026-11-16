@@ -314,6 +314,30 @@ def _audio_encode_args(suffix: str) -> list[str]:
     return ["-c:a", "aac", "-b:a", "256k"]
 
 
+def _part_path(dest: Path) -> Path:
+    """Keep the real audio suffix so ffmpeg can pick a muxer (not `.m4a.part`)."""
+    return dest.with_name(f".{dest.stem}.part{dest.suffix}")
+
+
+def _container_args(suffix: str) -> list[str]:
+    ext = (suffix or "").lower()
+    if ext in {".m4a", ".aac"}:
+        return ["-f", "ipod"]
+    if ext == ".mp4":
+        return ["-f", "mp4"]
+    if ext == ".mp3":
+        return ["-f", "mp3"]
+    return []
+
+
+def _run_ffmpeg(command: list[str]) -> None:
+    result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+    if result.returncode == 0:
+        return
+    err = (result.stderr or result.stdout or "").strip()
+    raise RuntimeError(err[-800:] if err else f"ffmpeg exit {result.returncode}")
+
+
 def _can_copy_audio(source: Path, dest: Path) -> bool:
     src = source.suffix.lower()
     dst = dest.suffix.lower()
@@ -386,7 +410,7 @@ def _probe_file_bitrate(path: Path) -> int:
 
 def _encode_into(source: Path, dest: Path, track: dict) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(dest.name + ".part")
+    tmp = _part_path(dest)
     tmp.unlink(missing_ok=True)
     if shutil.which("ffmpeg") is None:
         if dest.suffix.lower() != source.suffix.lower():
@@ -394,52 +418,50 @@ def _encode_into(source: Path, dest: Path, track: dict) -> None:
         shutil.copy2(source, dest)
         return
 
-    copy_audio = _can_copy_audio(source, dest)
-    command = [
-        "ffmpeg",
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        str(source),
-        "-map",
-        "0:a:0",
-        "-vn",
-        *(["-c:a", "copy"] if copy_audio else _audio_encode_args(dest.suffix)),
-        *_metadata_args(track),
-        str(tmp),
-    ]
-    if dest.suffix.lower() in {".m4a", ".mp4", ".aac"} and "-movflags" not in command:
-        command[command.index(str(tmp)):command.index(str(tmp))] = ["-movflags", "+faststart"]
-    try:
-        subprocess.run(command, check=True, timeout=180)
-    except Exception as exc:
+    def command(copy_audio: bool, mapped: bool) -> list[str]:
+        audio = ["-c:a", "copy"] if copy_audio else _audio_encode_args(dest.suffix)
+        mapping = ["-map", "0:a:0", "-vn"] if mapped else ["-vn"]
+        extra = []
+        if dest.suffix.lower() in {".m4a", ".mp4", ".aac"} and "-movflags" not in audio:
+            extra = ["-movflags", "+faststart"]
+        return [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(source),
+            *mapping,
+            *audio,
+            *_metadata_args(track),
+            *extra,
+            *_container_args(dest.suffix),
+            str(tmp),
+        ]
+
+    attempts = []
+    if _can_copy_audio(source, dest):
+        attempts.append(command(True, True))
+    attempts.append(command(False, True))
+    attempts.append(command(False, False))
+
+    last_error: Exception | None = None
+    for index, ffmpeg_cmd in enumerate(attempts):
+        try:
+            _run_ffmpeg(ffmpeg_cmd)
+            last_error = None
+            break
+        except Exception as exc:
+            last_error = exc
+            tmp.unlink(missing_ok=True)
+            if index == 0:
+                logger.warning("Stream-Kopie nach {} fehlgeschlagen, kodiere neu: {}", dest.name, exc)
+    if last_error:
+        raise RuntimeError(f"Ersetzen fehlgeschlagen: {last_error}") from last_error
+    if not tmp.is_file() or tmp.stat().st_size < 1024:
         tmp.unlink(missing_ok=True)
-        if copy_audio:
-            logger.warning("Stream-Kopie nach {} fehlgeschlagen, kodiere neu: {}", dest.name, exc)
-            retry = [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-y",
-                "-i",
-                str(source),
-                "-map",
-                "0:a:0",
-                "-vn",
-                *_audio_encode_args(dest.suffix),
-                *_metadata_args(track),
-                str(tmp),
-            ]
-            try:
-                subprocess.run(retry, check=True, timeout=180)
-            except Exception as retry_exc:
-                tmp.unlink(missing_ok=True)
-                raise RuntimeError(f"Ersetzen fehlgeschlagen: {retry_exc}") from retry_exc
-        else:
-            raise RuntimeError(f"Ersetzen fehlgeschlagen: {exc}") from exc
+        raise RuntimeError("ffmpeg hat keine gültige Audiodatei erzeugt")
     tmp.replace(dest)
 
 
@@ -536,11 +558,24 @@ def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None
     }
 
 
-def _run_replace(job_id: str, navidrome_id: str, video_id: str, format_id: str | None, inflight_key: str) -> None:
+def _run_replace(
+    job_id: str,
+    navidrome_id: str,
+    video_id: str,
+    format_id: str | None,
+    inflight_key: str,
+    source: str,
+    candidate: dict | None,
+) -> None:
     try:
         with _jobs_lock:
             _jobs[job_id]["status"] = "running"
-        result = replace_track(navidrome_id, video_id, format_id)
+        from app.navidrome import quality as nd_quality
+
+        if source in {"musikat", "usenet", "youtube"} and candidate:
+            result = nd_quality.replace_via_mediasync(navidrome_id, candidate)
+        else:
+            result = replace_track(navidrome_id, video_id, format_id)
         with _jobs_lock:
             _jobs[job_id]["status"] = "done"
             _jobs[job_id]["navidromeId"] = result.get("navidromeId")
@@ -555,10 +590,18 @@ def _run_replace(job_id: str, navidrome_id: str, video_id: str, format_id: str |
             _inflight.pop(inflight_key, None)
 
 
-def start_replace_job(navidrome_id: str, video_id: str, format_id: str | None = None) -> dict:
+def start_replace_job(
+    navidrome_id: str,
+    video_id: str = "",
+    format_id: str | None = None,
+    *,
+    source: str = "ytm",
+    candidate: dict | None = None,
+) -> dict:
     nd_id = (navidrome_id or "").strip()
     video_id = (video_id or "").strip()
-    inflight_key = f"replace:{nd_id}:{video_id}"
+    source = (source or "ytm").strip().lower() or "ytm"
+    inflight_key = f"replace:{nd_id}:{video_id or source}:{str((candidate or {}).get('id') or '')[:24]}"
     with _jobs_lock:
         existing_id = _inflight.get(inflight_key)
         if existing_id and existing_id in _jobs:
@@ -578,7 +621,7 @@ def start_replace_job(navidrome_id: str, video_id: str, format_id: str | None = 
 
     thread = threading.Thread(
         target=_run_replace,
-        args=(job_id, nd_id, video_id, format_id, inflight_key),
+        args=(job_id, nd_id, video_id, format_id, inflight_key, source, candidate),
         daemon=True,
         name=f"nd-quality-{nd_id[:8]}",
     )
