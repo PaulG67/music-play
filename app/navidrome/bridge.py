@@ -13,7 +13,8 @@ from app.navidrome import config
 from app.navidrome import ids as nd_ids
 from app.navidrome import match as nd_match
 from app.navidrome.client import NavidromeClient, NavidromeError
-from app.navidrome.importer import get_job, start_job
+from app.navidrome.importer import get_job, start_job, start_replace_job
+from app.navidrome import quality as nd_quality
 from app.services import catalog
 
 _warmed = False
@@ -343,3 +344,11 @@ async def import_tracks(video_ids: list[str]) -> list[dict]:
 
 def job(job_id: str) -> dict | None:
     return get_job(job_id)
+
+
+def search_quality(track: dict) -> dict:
+    return nd_quality.search_quality(track)
+
+
+def replace_quality(navidrome_id: str, video_id: str, format_id: str | None = None) -> dict:
+    return start_replace_job(navidrome_id, video_id, format_id)

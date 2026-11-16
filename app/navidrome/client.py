@@ -33,6 +33,13 @@ def _as_list(value) -> list:
     return [value]
 
 
+def _as_int(value, default: int = 0) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return default
+
+
 def _collection(body: dict, wrapper: str, item: str) -> list:
     """Subsonic JSON is inconsistent: one item is an object, many are a list,
     and some servers skip the wrapper entirely."""
@@ -73,7 +80,7 @@ def map_song(raw: dict, *, youtube_id: str | None = None) -> dict:
         "genre": raw.get("genre"),
         "path": raw.get("path") or "",
         "suffix": raw.get("suffix") or "",
-        "bitrate": raw.get("bitRate") or raw.get("bitrate") or 0,
+        "bitrate": _as_int(raw.get("bitRate") or raw.get("bitrate")),
         "navidromeId": navidrome_id,
         "inLibrary": True,
         "source": "navidrome" if not youtube_id else "both",

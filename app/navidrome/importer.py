@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -103,8 +104,6 @@ def _write_ffmpeg_tags(source: Path, dest: Path, track: dict) -> None:
         index = command.index("-movflags")
         command[index:index] = ["-metadata", f"track={track['track_no']}"]
     try:
-        import subprocess
-
         subprocess.run(command, check=True, timeout=120)
     except Exception as exc:
         logger.warning("Metadaten für {} nicht gesetzt, kopiere Datei: {}", dest.name, exc)
@@ -237,6 +236,7 @@ def job_snapshot(job: dict) -> dict:
         "error": job.get("error"),
         "navidromeId": job.get("navidromeId"),
         "title": job.get("title") or "",
+        "bitrate": job.get("bitrate") or 0,
     }
 
 
@@ -284,5 +284,303 @@ def start_job(track: dict) -> dict:
         _inflight[video_id] = job_id
 
     thread = threading.Thread(target=_run, args=(job_id, track), daemon=True, name=f"nd-import-{video_id}")
+    thread.start()
+    return job_snapshot(job)
+
+
+_AUDIO_EXTS = {".m4a", ".mp4", ".mp3", ".webm", ".opus", ".ogg", ".flac", ".wav", ".aac"}
+
+
+def _ydl_best_options(output_template: str, format_id: str | None = None) -> dict:
+    options = _ydl_options(output_template)
+    options["format"] = format_id or "bestaudio/best"
+    options["writethumbnail"] = False
+    options["embedthumbnail"] = False
+    options["postprocessors"] = [{"key": "FFmpegMetadata", "add_metadata": True}]
+    options.pop("postprocessor_args", None)
+    return options
+
+
+def _audio_encode_args(suffix: str) -> list[str]:
+    ext = (suffix or "").lower()
+    if ext in {".m4a", ".mp4", ".aac"}:
+        return ["-c:a", "aac", "-b:a", "256k", "-movflags", "+faststart"]
+    if ext == ".mp3":
+        return ["-c:a", "libmp3lame", "-b:a", "320k"]
+    if ext == ".flac":
+        return ["-c:a", "flac"]
+    if ext in {".ogg", ".opus"}:
+        return ["-c:a", "libopus", "-b:a", "192k"]
+    return ["-c:a", "aac", "-b:a", "256k"]
+
+
+def _can_copy_audio(source: Path, dest: Path) -> bool:
+    src = source.suffix.lower()
+    dst = dest.suffix.lower()
+    if src == dst:
+        return True
+    return src in {".m4a", ".mp4", ".aac"} and dst in {".m4a", ".mp4", ".aac"}
+
+
+def _metadata_args(track: dict) -> list[str]:
+    args = [
+        "-metadata",
+        f"title={track.get('title') or ''}",
+        "-metadata",
+        f"artist={track.get('artist') or ''}",
+        "-metadata",
+        f"album={track.get('album') or ''}",
+        "-metadata",
+        f"album_artist={track.get('artist') or ''}",
+        "-metadata",
+        f"date={track.get('year') or ''}",
+    ]
+    if track.get("track_no"):
+        args.extend(["-metadata", f"track={track['track_no']}"])
+    return args
+
+
+def _extract_cover(path: Path, dest: Path) -> Path | None:
+    if shutil.which("ffmpeg") is None or not path.is_file():
+        return None
+    try:
+        subprocess.run(
+            ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", str(path), "-an", "-c:v", "mjpeg", str(dest)],
+            check=True,
+            timeout=30,
+        )
+    except Exception:
+        dest.unlink(missing_ok=True)
+        return None
+    return dest if dest.is_file() and dest.stat().st_size > 32 else None
+
+
+def _probe_file_bitrate(path: Path) -> int:
+    if shutil.which("ffprobe") is None or not path.is_file():
+        return 0
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "a:0",
+                "-show_entries",
+                "stream=bit_rate",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        raw = (result.stdout or "").strip().splitlines()[0] if result.stdout else ""
+        bps = int(float(raw))
+        return max(1, round(bps / 1000)) if bps > 0 else 0
+    except Exception:
+        return 0
+
+
+def _encode_into(source: Path, dest: Path, track: dict) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    tmp.unlink(missing_ok=True)
+    if shutil.which("ffmpeg") is None:
+        if dest.suffix.lower() != source.suffix.lower():
+            raise RuntimeError("ffmpeg fehlt, die Datei kann nicht in das bestehende Format gewandelt werden")
+        shutil.copy2(source, dest)
+        return
+
+    copy_audio = _can_copy_audio(source, dest)
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source),
+        "-map",
+        "0:a:0",
+        "-vn",
+        *(["-c:a", "copy"] if copy_audio else _audio_encode_args(dest.suffix)),
+        *_metadata_args(track),
+        str(tmp),
+    ]
+    if dest.suffix.lower() in {".m4a", ".mp4", ".aac"} and "-movflags" not in command:
+        command[command.index(str(tmp)):command.index(str(tmp))] = ["-movflags", "+faststart"]
+    try:
+        subprocess.run(command, check=True, timeout=180)
+    except Exception as exc:
+        tmp.unlink(missing_ok=True)
+        if copy_audio:
+            logger.warning("Stream-Kopie nach {} fehlgeschlagen, kodiere neu: {}", dest.name, exc)
+            retry = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source),
+                "-map",
+                "0:a:0",
+                "-vn",
+                *_audio_encode_args(dest.suffix),
+                *_metadata_args(track),
+                str(tmp),
+            ]
+            try:
+                subprocess.run(retry, check=True, timeout=180)
+            except Exception as retry_exc:
+                tmp.unlink(missing_ok=True)
+                raise RuntimeError(f"Ersetzen fehlgeschlagen: {retry_exc}") from retry_exc
+        else:
+            raise RuntimeError(f"Ersetzen fehlgeschlagen: {exc}") from exc
+    tmp.replace(dest)
+
+
+def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None) -> dict:
+    nd_id = (navidrome_id or "").strip()
+    video_id = (video_id or "").strip()
+    if not nd_id:
+        raise RuntimeError("Navidrome-Id fehlt")
+    if not video_id or video_id.startswith("nd:"):
+        raise RuntimeError("YouTube-Id fehlt")
+    if not config.configured():
+        raise RuntimeError("Navidrome ist nicht konfiguriert")
+    if not config.music_dir_writable():
+        raise RuntimeError(
+            f"Musikordner nicht beschreibbar: {config.music_dir()}. "
+            "Denselben Ordner wie Navidrome nach /music einhängen."
+        )
+
+    with NavidromeClient() as client:
+        song = client.get_song(nd_id)
+    if not song:
+        raise RuntimeError("Titel nicht in Navidrome gefunden")
+
+    from app.navidrome import artwork
+
+    dest = artwork.resolve_audio_path({**song, "navidromeId": nd_id})
+    if dest is None or not dest.is_file():
+        raise RuntimeError("Audiodatei in der Navidrome-Quelle nicht gefunden")
+
+    tmp_dir = settings.audio_cache_dir / "quality"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    cover_tmp = tmp_dir / f"{nd_id}.cover.jpg"
+    _extract_cover(dest, cover_tmp)
+
+    logger.info("Ersetze Navidrome-Datei {} durch YouTube {}", dest, video_id)
+    try:
+        with yt_dlp.YoutubeDL(_ydl_best_options(str(tmp_dir / f"{video_id}.%(ext)s"), format_id)) as ydl:
+            ydl.extract_info(f"https://music.youtube.com/watch?v={video_id}", download=True)
+    except Exception as exc:
+        raise RuntimeError(f"Download fehlgeschlagen: {exc}") from exc
+
+    produced = next(
+        (path for path in tmp_dir.glob(f"{video_id}*") if path.suffix.lower() in _AUDIO_EXTS),
+        None,
+    )
+    if produced is None:
+        raise RuntimeError("yt-dlp hat keine Audiodatei erzeugt")
+
+    backup = dest.with_name(dest.name + ".bak")
+    try:
+        shutil.copy2(dest, backup)
+        _encode_into(produced, dest, song)
+        if cover_tmp.is_file():
+            try:
+                artwork.embed_image_file(dest, cover_tmp)
+            except Exception as exc:
+                logger.warning("Cover nach Qualitäts-Tausch nicht eingebettet: {}", exc)
+    except Exception:
+        if backup.is_file():
+            shutil.move(str(backup), str(dest))
+        raise
+    backup.unlink(missing_ok=True)
+    for leftover in tmp_dir.glob(f"{video_id}*"):
+        leftover.unlink(missing_ok=True)
+    cover_tmp.unlink(missing_ok=True)
+
+    bitrate = _probe_file_bitrate(dest)
+    with NavidromeClient() as client:
+        _wait_for_scan(client)
+        updated = client.get_song(nd_id)
+        if updated and int(updated.get("bitrate") or 0) in (0, song.get("bitrate")):
+            time.sleep(3)
+            updated = client.get_song(nd_id) or updated
+
+    if updated and int(updated.get("bitrate") or 0):
+        bitrate = int(updated.get("bitrate") or bitrate)
+
+    nd_match.refresh_index(force=True)
+    with session_scope() as session:
+        repo.upsert_navidrome_link(
+            session,
+            video_id,
+            nd_id,
+            title=song.get("title") or "",
+            artist=song.get("artist") or "",
+            path=str(dest),
+        )
+    return {
+        "navidromeId": nd_id,
+        "path": str(dest),
+        "bitrate": bitrate,
+        "title": (updated or song).get("title") or song.get("title") or "",
+        "artist": (updated or song).get("artist") or song.get("artist") or "",
+    }
+
+
+def _run_replace(job_id: str, navidrome_id: str, video_id: str, format_id: str | None, inflight_key: str) -> None:
+    try:
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "running"
+        result = replace_track(navidrome_id, video_id, format_id)
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "done"
+            _jobs[job_id]["navidromeId"] = result.get("navidromeId")
+            _jobs[job_id]["bitrate"] = result.get("bitrate") or 0
+    except Exception as exc:
+        logger.error("Qualitäts-Tausch von {} fehlgeschlagen: {}", navidrome_id, exc)
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "error"
+            _jobs[job_id]["error"] = str(exc)
+    finally:
+        with _jobs_lock:
+            _inflight.pop(inflight_key, None)
+
+
+def start_replace_job(navidrome_id: str, video_id: str, format_id: str | None = None) -> dict:
+    nd_id = (navidrome_id or "").strip()
+    video_id = (video_id or "").strip()
+    inflight_key = f"replace:{nd_id}:{video_id}"
+    with _jobs_lock:
+        existing_id = _inflight.get(inflight_key)
+        if existing_id and existing_id in _jobs:
+            return job_snapshot(_jobs[existing_id])
+        job_id = uuid.uuid4().hex[:12]
+        job = {
+            "id": job_id,
+            "videoId": video_id,
+            "status": "queued",
+            "error": None,
+            "navidromeId": nd_id,
+            "title": "",
+            "bitrate": 0,
+        }
+        _jobs[job_id] = job
+        _inflight[inflight_key] = job_id
+
+    thread = threading.Thread(
+        target=_run_replace,
+        args=(job_id, nd_id, video_id, format_id, inflight_key),
+        daemon=True,
+        name=f"nd-quality-{nd_id[:8]}",
+    )
     thread.start()
     return job_snapshot(job)

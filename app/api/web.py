@@ -1129,6 +1129,41 @@ async def navidrome_job(request: Request, job_id: str):
     return found
 
 
+@router.post("/navidrome/quality/search")
+async def navidrome_quality_search(request: Request, payload: dict = Body(...)):
+    _require_session(request)
+    track = {
+        "id": payload.get("videoId") or payload.get("id") or "",
+        "title": payload.get("title") or "",
+        "artist": payload.get("artist") or "",
+        "album": payload.get("album") or "",
+        "duration": payload.get("duration") or 0,
+        "bitrate": payload.get("bitrate") or 0,
+        "navidromeId": payload.get("navidromeId") or "",
+        "path": payload.get("path") or "",
+    }
+    try:
+        return await run_in_threadpool(navidrome.search_quality, track)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/navidrome/quality/replace")
+async def navidrome_quality_replace(request: Request, payload: dict = Body(...)):
+    _require_session(request)
+    if not navidrome.configured():
+        raise HTTPException(status_code=400, detail="Navidrome ist nicht konfiguriert")
+    navidrome_id = str(payload.get("navidromeId") or nd_ids.unwrap(payload.get("id")) or "").strip()
+    video_id = str(payload.get("videoId") or "").strip()
+    format_id = str(payload.get("formatId") or "").strip() or None
+    if not navidrome_id:
+        raise HTTPException(status_code=400, detail="Titel ist nicht in Navidrome")
+    if not video_id or video_id.startswith("nd:"):
+        raise HTTPException(status_code=400, detail="videoId fehlt")
+    job = navidrome.replace_quality(navidrome_id, video_id, format_id)
+    return {"job": job}
+
+
 # --------------------------------------------------------------------------
 # MediaSync
 # --------------------------------------------------------------------------

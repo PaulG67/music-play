@@ -232,6 +232,15 @@
     return gigabytes >= 1 ? `${gigabytes.toFixed(2)} GB` : `${Math.round(bytes / 1024 ** 2)} MB`;
   }
 
+  function formatBitrate(kbps) {
+    const value = Number(kbps) || 0;
+    return value > 0 ? `${Math.round(value)} kbit/s` : "—";
+  }
+
+  function navidromeTrackId(track) {
+    return String(track?.navidromeId || "").trim() || (String(track?.id || "").startsWith("nd:") ? String(track.id).slice(3) : "");
+  }
+
   function toast(message) {
     const node = $("toast");
     node.textContent = message;
@@ -669,6 +678,20 @@
     if (isLocalTrack(track)) row.append(element("span", { class: "pill", text: "Navidrome" }));
     else if (Offline.has(track.id)) row.append(element("span", { class: "pill", text: "Offline" }));
     if (track.duration) row.append(element("span", { class: "track-time", text: formatTime(track.duration) }));
+    if (options.showBitrate) {
+      const canReplace = Boolean(navidromeReady() && navidromeTrackId(track));
+      const bitrate = element("span", {
+        class: canReplace ? "track-bitrate is-action" : "track-bitrate",
+        text: formatBitrate(track.bitrate),
+        title: canReplace ? "Andere Qualität wählen" : "Bitrate",
+      });
+      bitrate.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openQualitySheet(track);
+      });
+      row.append(bitrate);
+    }
 
     const more = element("span", { class: "track-more", text: "⋯" });
     more.addEventListener("click", (event) => {
@@ -683,12 +706,17 @@
   }
 
   function trackList(tracks, options = {}) {
+    const head = [
+      element("span", { class: "track-index", text: "#" }),
+      element("span", { class: "track-text", text: "Titel" }),
+      element("span", { class: "track-time", text: "Dauer" }),
+    ];
+    if (options.showBitrate) {
+      head.push(element("span", { class: "track-bitrate", text: "Bitrate" }));
+      head.push(element("span", { class: "track-more", "aria-hidden": "true" }));
+    }
     return element("div", { class: "track-list" }, [
-      element("div", { class: "track-head", "aria-hidden": "true" }, [
-        element("span", { class: "track-index", text: "#" }),
-        element("span", { class: "track-text", text: "Titel" }),
-        element("span", { class: "track-time", text: "Dauer" }),
-      ]),
+      element("div", { class: "track-head", "aria-hidden": "true" }, head),
       ...tracks.map((track, position) => trackRow(track, tracks, position, options)),
     ]);
   }
@@ -1293,7 +1321,7 @@
         [favorite],
         "Album"
       ),
-      trackList(tracks)
+      trackList(tracks, { showBitrate: true })
     );
   }
 
@@ -1404,7 +1432,7 @@
         "Playlist",
         { source: "local", id: playlistId, name: playlist.name }
       ),
-      trackList(tracks, { playlist: { source: "local", id: playlistId, name: playlist.name } })
+      trackList(tracks, { playlist: { source: "local", id: playlistId, name: playlist.name }, showBitrate: true })
     );
   }
 
@@ -1426,7 +1454,7 @@
         "Playlist",
         { source: "navidrome", id: playlistId, name: playlist.name }
       ),
-      trackList(tracks, { playlist: { source: "navidrome", id: playlistId, name: playlist.name } })
+      trackList(tracks, { playlist: { source: "navidrome", id: playlistId, name: playlist.name }, showBitrate: true })
     );
   }
 
@@ -1472,7 +1500,7 @@
         { source: "youtube", id: playlistId, name: playlist.name }
       ),
       tracks.length
-        ? trackList(tracks, { playlist: { source: "youtube", id: playlistId, name: playlist.name } })
+        ? trackList(tracks, { playlist: { source: "youtube", id: playlistId, name: playlist.name }, showBitrate: true })
         : element("div", { class: "empty", text: "Keine Titel in dieser Playlist." })
     );
   }
@@ -1635,7 +1663,7 @@
       !showView(
         gen,
         playAllHeader("Lieblingstitel", `${tracks.length} Titel`, null, tracks, [], "Playlist", { source: "liked" }),
-        tracks.length ? trackList(tracks, { playlist: { source: "liked" } }) : element("div", { class: "empty", text: "Noch keine Favoriten." })
+        tracks.length ? trackList(tracks, { playlist: { source: "liked" }, showBitrate: true }) : element("div", { class: "empty", text: "Noch keine Favoriten." })
       )
     ) {
       return;
@@ -1889,7 +1917,7 @@
       ["Am häufigsten gehört", frequentSongs],
     ]) {
       if (!tracks.length) continue;
-      fragment.append(element("div", { class: "section" }, [element("h2", { text: title }), trackList(tracks)]));
+      fragment.append(element("div", { class: "section" }, [element("h2", { text: title }), trackList(tracks, { showBitrate: true })]));
     }
 
     for (const [title, items] of [
@@ -2830,6 +2858,16 @@
           },
         })
       );
+      actions.push(
+        element("button", {
+          class: "action",
+          text: track.bitrate ? `Qualität (${formatBitrate(track.bitrate)}) …` : "Qualität wählen …",
+          onclick: () => {
+            closeSheet();
+            openQualitySheet(track);
+          },
+        })
+      );
     }
 
     actions.push(
@@ -3414,6 +3452,134 @@
       const names = selected.map((item) => item.name).join(", ");
       toast(selected.length === 1 ? `Heruntergeladen und zu „${names}“ hinzugefügt` : `Heruntergeladen und zu ${selected.length} Playlists hinzugefügt`);
     }
+  }
+
+  function applyTrackBitrate(track, bitrate) {
+    const value = Number(bitrate) || 0;
+    if (value > 0) track.bitrate = value;
+    const id = String(track.id || "");
+    document.querySelectorAll(".track").forEach((row) => {
+      if (row.dataset.videoId !== id) return;
+      const chip = row.querySelector(".track-bitrate");
+      if (chip) chip.textContent = formatBitrate(track.bitrate);
+    });
+    try {
+      const current = Player.current && Player.current();
+      if (current && current.id === track.id && value > 0) current.bitrate = value;
+    } catch {
+      /* queue shape is optional */
+    }
+  }
+
+  async function openQualitySheet(track) {
+    const heading = "Bessere Qualität";
+    openSheet(heading, [
+      element("p", {
+        class: "muted",
+        text: `Aktuell ${formatBitrate(track.bitrate)}. Suche nach diesem Titel …`,
+      }),
+    ]);
+    let data;
+    try {
+      data = await api("/api/navidrome/quality/search", {
+        method: "POST",
+        body: {
+          videoId: String(track.id || "").startsWith("nd:") ? "" : track.id,
+          title: track.title,
+          artist: track.artist,
+          album: track.album || "",
+          duration: track.duration || 0,
+          bitrate: track.bitrate || 0,
+          navidromeId: navidromeTrackId(track),
+          path: track.path || "",
+        },
+      });
+    } catch (error) {
+      openSheet(heading, [element("p", { class: "muted", text: error.message })]);
+      return;
+    }
+    const options = data.options || [];
+    const ndId = data.navidromeId || navidromeTrackId(track);
+    const libraryBitrate = Number(data.bitrate || track.bitrate) || 0;
+    if (libraryBitrate) applyTrackBitrate(track, libraryBitrate);
+    if (!options.length) {
+      openSheet(heading, [
+        element("p", {
+          class: "muted",
+          text: data.query
+            ? `Keine passende Version für „${data.query}“ gefunden.`
+            : "Keine passende Version gefunden.",
+        }),
+      ]);
+      return;
+    }
+
+    const pick = async (option) => {
+      if (!ndId || !navidromeReady()) {
+        toast("Nur Titel in Navidrome können ersetzt werden");
+        return;
+      }
+      openSheet(heading, [
+        element("p", { class: "muted", text: `Ersetze durch ${formatBitrate(option.bitrate)} …` }),
+      ]);
+      try {
+        const result = await api("/api/navidrome/quality/replace", {
+          method: "POST",
+          body: {
+            navidromeId: ndId,
+            videoId: option.videoId,
+            formatId: option.formatId || "",
+          },
+        });
+        const jobs = await waitForJobs(result.job ? [result.job] : result.jobs || []);
+        const done = jobs[0] || {};
+        if (done.status === "error") throw new Error(done.error || "Ersetzen fehlgeschlagen");
+        applyTrackBitrate(track, done.bitrate || option.bitrate);
+        closeSheet();
+        toast(`Quelle ersetzt · ${formatBitrate(track.bitrate || option.bitrate)}`);
+      } catch (error) {
+        openSheet(heading, [
+          element("p", { class: "muted", text: error.message }),
+          element("button", {
+            class: "action",
+            text: "Zurück zur Auswahl",
+            onclick: () => openQualitySheet(track),
+          }),
+        ]);
+      }
+    };
+
+    openSheet(heading, [
+      element("p", {
+        class: "muted",
+        text: ndId
+          ? `Aktuell ${formatBitrate(libraryBitrate)} in Navidrome. Antippen ersetzt die Datei.`
+          : `Aktuell ${formatBitrate(libraryBitrate)}. Zum Ersetzen den Titel zuerst nach Navidrome legen.`,
+      }),
+      ...options.map((option) =>
+        element(
+          "button",
+          {
+            type: "button",
+            class: "action quality-option",
+            onclick: () => pick(option),
+          },
+          [
+            element("span", { class: "quality-option-text" }, [
+              element("strong", { text: `${formatBitrate(option.bitrate)} · ${option.codec || "Audio"}` }),
+              element("span", {
+                text: [option.title, option.duration ? formatTime(option.duration) : ""].filter(Boolean).join(" · "),
+              }),
+            ]),
+            option.current
+              ? element("span", { class: "quality-option-badge", text: "aktuell" })
+              : option.better
+                ? element("span", { class: "quality-option-badge", text: "besser" })
+                : null,
+          ]
+        )
+      ),
+    ]);
   }
 
   async function openCoverSheet(track) {

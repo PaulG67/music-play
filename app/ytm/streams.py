@@ -152,6 +152,38 @@ def resolve_source(video_id: str) -> StreamSource | None:
         return source
 
 
+def probe_audio(video_id: str) -> dict | None:
+    """Best available audio stream metadata, without downloading."""
+    try:
+        with yt_dlp.YoutubeDL(_ydl_options()) as ydl:
+            info = ydl.extract_info(f"https://music.youtube.com/watch?v={video_id}", download=False)
+    except Exception as exc:
+        logger.debug("Audio-Probe für {} fehlgeschlagen: {}", video_id, exc)
+        return None
+
+    formats = [
+        fmt
+        for fmt in (info or {}).get("formats") or []
+        if fmt.get("acodec") not in (None, "none") and (fmt.get("abr") or fmt.get("tbr") or fmt.get("filesize"))
+    ]
+    picked = _pick_format(info or {})
+    best = max(formats, key=lambda fmt: float(fmt.get("abr") or fmt.get("tbr") or 0), default=None) if formats else None
+    fmt = best or picked
+    if not fmt:
+        return None
+    try:
+        bitrate = int(float(fmt.get("abr") or fmt.get("tbr") or 0))
+    except (TypeError, ValueError):
+        bitrate = 0
+    return {
+        "bitrate": bitrate,
+        "acodec": (fmt.get("acodec") or "").lower(),
+        "ext": (fmt.get("ext") or "").lower(),
+        "format_id": str(fmt.get("format_id") or ""),
+        "title": (info or {}).get("title") or "",
+    }
+
+
 # --------------------------------------------------------------------------
 # Disk cache
 # --------------------------------------------------------------------------

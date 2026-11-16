@@ -586,6 +586,7 @@ svg { fill: currentColor; }
 }
 .track-head .track-text { flex: 1; }
 .track-head .track-time { margin-left: auto; }
+.track-head .track-bitrate { flex: 0 0 76px; }
 
 .track {
   display: flex;
@@ -972,6 +973,22 @@ input[type="range"]::-moz-range-thumb {
   flex: 0 0 auto;
 }
 .track-time { font-size: 12px; color: var(--text-dim); flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.track-bitrate {
+  font-size: 12px;
+  color: var(--text-dim);
+  flex: 0 0 76px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.track-bitrate.is-action {
+  cursor: pointer;
+  color: var(--text);
+}
+.track-bitrate.is-action:hover,
+.track-bitrate.is-action:focus-visible {
+  color: var(--accent);
+}
 
 .chips { display: flex; flex-wrap: wrap; gap: 0; margin-bottom: 8px; }
 .grid {
@@ -1492,6 +1509,31 @@ input[type="range"]::-moz-range-thumb {
 }
 .sheet-body button.action.active { color: var(--accent); }
 .sheet-body button.action:last-child { border-bottom: 0; }
+.sheet-body button.action.quality-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.quality-option-text { min-width: 0; }
+.quality-option-text strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+}
+.quality-option-text span {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.quality-option-badge {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--accent);
+}
 .sheet-title { font-size: 13px; color: var(--text-dim); margin-bottom: 6px; }
 .sheet-body input[type="search"] {
   width: 100%;

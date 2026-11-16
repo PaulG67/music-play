@@ -127,6 +127,17 @@ def indexed_songs() -> list[dict]:
         return list(_index)
 
 
+def indexed_by_id(navidrome_id: str) -> dict | None:
+    needle = str(navidrome_id or "")
+    if not needle:
+        return None
+    with _index_lock:
+        for song in _index:
+            if str(song.get("navidromeId") or "") == needle:
+                return song
+    return None
+
+
 def _candidates_from_index(track: dict) -> list[dict]:
     title = track.get("title") or ""
     artist = track.get("artist") or ""
@@ -187,6 +198,7 @@ def find_live(track: dict) -> dict | None:
                 "album": song.get("album"),
                 "duration": song.get("duration"),
                 "path": song.get("path"),
+                "bitrate": song.get("bitrate") or 0,
                 "coverArt": (song.get("thumbnail") or "").rsplit("/", 1)[-1],
                 "albumId": nd_unwrap(song.get("album_id")),
                 "artistId": nd_unwrap(song.get("artist_id")),
@@ -233,6 +245,20 @@ def resolve(track: dict) -> dict | None:
     return found
 
 
+def _attach_library_fields(item: dict, found: dict | None) -> None:
+    ref = dict(found or {})
+    indexed = indexed_by_id(str(item.get("navidromeId") or ref.get("id") or ref.get("navidromeId") or ""))
+    if indexed:
+        for key in ("bitrate", "path"):
+            if indexed.get(key) and not ref.get(key):
+                ref[key] = indexed[key]
+    bitrate = ref.get("bitrate")
+    if bitrate and not item.get("bitrate"):
+        item["bitrate"] = bitrate
+    if ref.get("path") and not item.get("path"):
+        item["path"] = ref.get("path")
+
+
 def enrich(tracks: list[dict], live_limit: int = 0) -> list[dict]:
     """Attach navidromeId / inLibrary to YouTube (or mixed) track dicts."""
     if not tracks:
@@ -257,6 +283,7 @@ def enrich(tracks: list[dict], live_limit: int = 0) -> list[dict]:
             item["inLibrary"] = True
             item["navidromeId"] = item.get("navidromeId") or nd_unwrap(video_id)
             item["source"] = item.get("source") or ("navidrome" if str(video_id).startswith("nd:") else "both")
+            _attach_library_fields(item, indexed_by_id(item.get("navidromeId") or ""))
             decorated.append(item)
             continue
 
@@ -297,6 +324,7 @@ def enrich(tracks: list[dict], live_limit: int = 0) -> list[dict]:
             item["navidromeId"] = str(found["id"])
             item["inLibrary"] = True
             item["source"] = "both"
+            _attach_library_fields(item, found)
         else:
             item.setdefault("navidromeId", None)
             item.setdefault("inLibrary", False)
