@@ -324,6 +324,29 @@
     toast.timer = setTimeout(() => (node.hidden = true), Math.max(1200, Number(durationMs) || 2800));
   }
 
+  function showNotice(title, message, options = {}) {
+    const tone = options.tone || "ok";
+    openSheet(title, [
+      element("p", {
+        class: `notice-message${tone === "error" ? " is-error" : ""}`,
+        text: message,
+      }),
+      element("div", { class: "sheet-footer" }, [
+        element("button", {
+          type: "button",
+          class: "action primary",
+          text: options.okLabel || "OK",
+          onclick: (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            closeSheet();
+            if (typeof options.onOk === "function") options.onOk();
+          },
+        }),
+      ]),
+    ]);
+  }
+
   function element(tag, attributes = {}, children = []) {
     const node = document.createElement(tag);
     for (const [key, value] of Object.entries(attributes)) {
@@ -2813,10 +2836,16 @@
         const done = finished[0] || {};
         if (done.status === "error") throw new Error(done.error || "Ersetzen fehlgeschlagen");
         applyTrackBitrate(track, done.bitrate || option.bitrate);
-        toast(`„${title}“ ersetzt · ${formatBitrate(track.bitrate || option.bitrate)}`, 3600);
         refreshOfflineBadges();
+        const bitrate = formatBitrate(track.bitrate || option.bitrate);
+        showNotice(
+          "Ersetzen abgeschlossen",
+          `„${title}“ wurde erfolgreich ersetzt (${bitrate}).`
+        );
       } catch (error) {
-        toast(error.message || "Ersetzen fehlgeschlagen", 4200);
+        showNotice("Ersetzen fehlgeschlagen", error.message || "Unbekannter Fehler", {
+          tone: "error",
+        });
       }
     })();
   }
@@ -3808,31 +3837,92 @@
       return;
     }
     let chosen = candidates[0];
+    let applying = false;
     const grid = element("div", { class: "cover-picker" });
-    const paint = () => {
-      grid.replaceChildren(
-        ...candidates.map((item) =>
-          element(
-            "button",
-            {
-              type: "button",
-              class: `cover-option${chosen && chosen.id === item.id ? " selected" : ""}`,
-              onclick: () => {
-                chosen = item;
-                paint();
-              },
-            },
-            [
-              element("img", { src: coverUrl(item.url, 400), alt: item.label || "Cover" }),
-              element("span", { text: `${item.original === false ? "Video · " : ""}${item.source}: ${item.label}` }),
-            ]
-          )
-        )
-      );
+    const markSelected = () => {
+      grid.querySelectorAll(".cover-option").forEach((button) => {
+        const selected = button.dataset.coverId === String(chosen?.id || "");
+        button.classList.toggle("selected", selected);
+        button.setAttribute("aria-pressed", selected ? "true" : "false");
+      });
     };
-    paint();
+    const selectCover = (item, event) => {
+      if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      chosen = item;
+      markSelected();
+    };
+    candidates.forEach((item) => {
+      const image = element("img", {
+        src: coverUrl(item.url, 400),
+        alt: item.label || "Cover",
+        draggable: "false",
+      });
+      image.addEventListener("error", () => (image.src = PLACEHOLDER));
+      const button = element(
+        "button",
+        {
+          type: "button",
+          class: `cover-option${chosen && chosen.id === item.id ? " selected" : ""}`,
+          "data-cover-id": String(item.id || ""),
+          "aria-pressed": chosen && chosen.id === item.id ? "true" : "false",
+        },
+        [
+          image,
+          element("span", {
+            text: `${item.original === false ? "Video · " : ""}${item.source}: ${item.label}`,
+          }),
+        ]
+      );
+      // iOS Safari: click on nested <img> is flaky; bind pointer/touch on the button.
+      const activate = (event) => selectCover(item, event);
+      button.addEventListener("click", activate);
+      button.addEventListener(
+        "touchend",
+        (event) => {
+          // Prevent ghost click / scroll-tap misses after selecting an image tile.
+          if (applying) return;
+          activate(event);
+        },
+        { passive: false }
+      );
+      grid.append(button);
+    });
+    const saveAlbum = element("button", {
+      type: "button",
+      class: "action primary",
+      text: data.fileFound ? "In Datei + Navidrome speichern" : "Speichern nicht möglich",
+      disabled: data.fileFound ? null : true,
+    });
+    const saveFile = element("button", {
+      type: "button",
+      class: "action secondary",
+      text: "Nur diese Datei",
+      disabled: data.fileFound ? null : true,
+    });
+    const setBusy = (busy) => {
+      applying = busy;
+      saveAlbum.disabled = busy || !data.fileFound;
+      saveFile.disabled = busy || !data.fileFound;
+      saveAlbum.textContent = busy
+        ? "Speichert …"
+        : data.fileFound
+          ? "In Datei + Navidrome speichern"
+          : "Speichern nicht möglich";
+    };
     const apply = async (album) => {
-      if (!chosen) return;
+      if (!chosen || applying) return;
+      if (!data.fileFound) {
+        showNotice(
+          "Audiodatei fehlt",
+          "Cover gefunden, aber die Datei liegt nicht unter dem Musikordner. Unraid-/Navidrome-Pfad prüfen.",
+          { tone: "error" }
+        );
+        return;
+      }
+      setBusy(true);
       try {
         const result = await api("/api/covers/embed", {
           method: "POST",
@@ -3843,42 +3933,46 @@
             title: data.title || track.title,
             artist: data.artist || track.artist,
             album: data.album || track.album || "",
-            navidromeId: data.navidromeId || track.navidromeId || (String(track.id || "").startsWith("nd:") ? String(track.id).slice(3) : ""),
+            navidromeId:
+              data.navidromeId ||
+              track.navidromeId ||
+              (String(track.id || "").startsWith("nd:") ? String(track.id).slice(3) : ""),
             path: data.path || track.path || "",
           },
         });
-        closeSheet();
-        toast(
+        showNotice(
+          "Cover gespeichert",
           album
             ? `Cover in ${result.files} Dateien und den Albumordner geschrieben. Navidrome scannt neu.`
             : "Cover in die Datei geschrieben. Navidrome scannt neu."
         );
       } catch (error) {
-        toast(error.message);
+        setBusy(false);
+        showNotice("Cover nicht gespeichert", error.message || "Unbekannter Fehler", {
+          tone: "error",
+        });
       }
     };
+    const bindSave = (button, album) => {
+      const run = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        apply(album);
+      };
+      button.addEventListener("click", run);
+      button.addEventListener("touchend", run, { passive: false });
+    };
+    bindSave(saveAlbum, true);
+    bindSave(saveFile, false);
     openSheet(heading, [
       element("p", {
         class: "muted",
         text: data.fileFound
-          ? `Original-Cover für ${data.query || "diesen Titel"}. Antippen, dann speichern – in die Audiodatei und nach Navidrome.`
+          ? `Original-Cover für ${data.query || "diesen Titel"}. Cover antippen, dann speichern.`
           : "Cover gefunden, aber die Audiodatei auf dem NAS fehlt. Unraid-Musik-Pfad prüfen.",
       }),
       grid,
-      element("div", { class: "sheet-footer" }, [
-        element("button", {
-          type: "button",
-          class: "action primary",
-          text: "In Datei + Navidrome speichern",
-          onclick: () => apply(true),
-        }),
-        element("button", {
-          type: "button",
-          class: "action",
-          text: "Nur diese Datei",
-          onclick: () => apply(false),
-        }),
-      ]),
+      element("div", { class: "sheet-footer" }, [saveAlbum, saveFile]),
     ]);
   }
 
