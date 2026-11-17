@@ -514,22 +514,32 @@ def replace_via_mediasync(navidrome_id: str, candidate: dict) -> dict:
             return recovered
         raise RuntimeError(failure)
 
-    time.sleep(2)
     bitrate = _probe_file_bitrate(dest) if dest.is_file() else 0
+    updated = None
     with NavidromeClient() as client:
-        _wait_for_scan(client)
-        updated = client.get_song(nd_id)
-        if updated is None:
-            found = _locate(song)
-            if found:
-                updated = found
-                nd_id = str(found.get("id") or found.get("navidromeId") or nd_id)
+        _wait_for_scan(client, timeout=6)
+        deadline = time.time() + 12
+        while time.time() < deadline:
+            updated = client.get_song(nd_id)
+            if updated is None:
+                found = _locate(song, force_refresh=False)
+                if found:
+                    updated = found
+                    nd_id = str(found.get("id") or found.get("navidromeId") or nd_id)
+            new_bitrate = int((updated or {}).get("bitrate") or 0)
+            if updated and new_bitrate and new_bitrate != int(song.get("bitrate") or 0):
+                break
+            if updated is not None:
+                break
+            time.sleep(0.6)
         if updated and int(updated.get("bitrate") or 0):
             bitrate = int(updated.get("bitrate") or bitrate)
         elif dest.is_file():
             bitrate = _probe_file_bitrate(dest) or bitrate
 
-    nd_match.refresh_index(force=True)
+    from app.navidrome.importer import _refresh_index_async
+
+    _refresh_index_async()
     return {
         "navidromeId": nd_id,
         "path": str(dest),
