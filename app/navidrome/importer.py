@@ -358,9 +358,7 @@ _AUDIO_EXTS = {".m4a", ".mp4", ".mp3", ".webm", ".opus", ".ogg", ".flac", ".wav"
 
 def _ydl_best_options(output_template: str, format_id: str | None = None) -> dict:
     options = _ydl_options(output_template)
-    # Always take YouTube's best audio. A pinned m4a itag is 128k AAC.
-    chosen = (format_id or "").strip()
-    options["format"] = chosen if chosen and chosen not in {"140", "139", "bestaudio[ext=m4a]"} else "bestaudio/best"
+    options["format"] = streams.quality_format_selector(format_id)
     options["overwrites"] = True
     options["writethumbnail"] = False
     options["embedthumbnail"] = False
@@ -370,19 +368,17 @@ def _ydl_best_options(output_template: str, format_id: str | None = None) -> dic
 
 
 def _bitrate_is_upgrade(got: int, current: int, wanted: int) -> bool:
-    if got <= 0:
+    if got and got < 80:
         return False
-    if current and got + 20 < current:
-        return False
-    if wanted >= 280 and got < 200:
+    if current and got and got + 20 < current:
         return False
     return True
 
 
 def _bitrate_reject_message(got: int, current: int, wanted: int) -> str:
-    if wanted >= 280 and got < 200:
+    if got < 80:
         return (
-            f"Gewählt waren {wanted} kbit/s, der Download liefert nur {got} kbit/s. "
+            f"Download liefert nur {got or '?'} kbit/s. "
             "Die Navidrome-Datei wurde nicht ersetzt."
         )
     if current and got + 20 < current:
@@ -776,7 +772,7 @@ def replace_track(
             wanted_bitrate=wanted_bitrate,
             force_mp3_320=force_mp3_320,
             video_id=video_id,
-            skip_upgrade_check=True,
+            skip_upgrade_check=False,
         )
     finally:
         for leftover in tmp_dir.glob(f"{video_id}*"):

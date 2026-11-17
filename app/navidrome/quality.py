@@ -142,27 +142,38 @@ def _collect_candidates(track: dict) -> list[dict]:
     return pool
 
 
-def _probe_item(item: dict) -> dict | None:
+def _probe_item(item: dict) -> list[dict]:
     video_id = str(item.get("id") or "")
-    probe = streams.probe_audio(video_id)
-    if not probe or not probe.get("bitrate"):
-        return None
-    codec = _codec_label(probe.get("acodec") or "", probe.get("ext") or "")
-    return {
-        "videoId": video_id,
-        "source": "ytm",
-        "sourceLabel": _SOURCE_LABELS["ytm"],
-        "title": item.get("title") or probe.get("title") or "",
-        "artist": item.get("artist") or "",
-        "album": item.get("album") or "",
-        "detail": "",
-        "duration": item.get("duration") or 0,
-        "bitrate": int(probe["bitrate"]),
-        "codec": codec,
-        "ext": probe.get("ext") or "",
-        "formatId": probe.get("format_id") or "",
-        "candidate": None,
-    }
+    probes = streams.probe_audio_options(video_id)
+    options: list[dict] = []
+    seen: set[int] = set()
+    for probe in probes:
+        bitrate = int(probe.get("bitrate") or 0)
+        if bitrate < 80:
+            continue
+        bucket = 128 if 96 <= bitrate <= 144 else bitrate
+        if bucket in seen:
+            continue
+        seen.add(bucket)
+        codec = _codec_label(probe.get("acodec") or "", probe.get("ext") or "")
+        options.append(
+            {
+                "videoId": video_id,
+                "source": "ytm",
+                "sourceLabel": _SOURCE_LABELS["ytm"],
+                "title": item.get("title") or probe.get("title") or "",
+                "artist": item.get("artist") or "",
+                "album": item.get("album") or "",
+                "detail": "",
+                "duration": item.get("duration") or 0,
+                "bitrate": bitrate,
+                "codec": codec,
+                "ext": probe.get("ext") or "",
+                "formatId": probe.get("format_id") or "",
+                "candidate": None,
+            }
+        )
+    return options
 
 
 def _bitrate_from_text(*parts: object) -> tuple[int, str]:
@@ -534,7 +545,14 @@ def search_quality(track: dict) -> dict:
 
     by_key: dict[str, dict] = {}
     for option in options:
-        key = str(option.get("videoId") or (option.get("candidate") or {}).get("id") or option.get("title"))
+        key = ":".join(
+            [
+                str(option.get("source") or ""),
+                str(option.get("videoId") or ""),
+                str(option.get("formatId") or (option.get("candidate") or {}).get("id") or option.get("title") or ""),
+                str(int(option.get("bitrate") or 0)),
+            ]
+        )
         previous = by_key.get(key)
         if not previous or int(option.get("bitrate") or 0) > int(previous.get("bitrate") or 0):
             by_key[key] = option

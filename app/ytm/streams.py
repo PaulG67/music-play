@@ -32,6 +32,21 @@ CONTENT_TYPES = {
 }
 
 FORMAT_SELECTOR = "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio/best"
+# YouTube audio itags. 139/249 are ~48 kbit/s and must not replace a 128 file.
+_LOW_AUDIO_ITAGS = {"139", "249", "599", "600"}
+_SAFE_AUDIO_ITAGS = {"140", "141", "250", "251", "256", "258"}
+
+
+def quality_format_selector(format_id: str | None = None) -> str:
+    """Audio-only yt-dlp selector. Never fall back to a 480p video stream."""
+    chosen = (format_id or "").strip()
+    if chosen in _LOW_AUDIO_ITAGS or "+" in chosen:
+        chosen = ""
+    if chosen == "140":
+        return "140/bestaudio[ext=m4a]/bestaudio"
+    if chosen in _SAFE_AUDIO_ITAGS:
+        return f"{chosen}/bestaudio"
+    return "bestaudio[vcodec=none]/bestaudio/140"
 
 _url_cache = TTLCache(ttl=3600, max_items=500)
 _resolve_locks: dict[str, threading.Lock] = {}
@@ -152,36 +167,78 @@ def resolve_source(video_id: str) -> StreamSource | None:
         return source
 
 
-def probe_audio(video_id: str) -> dict | None:
-    """Best available audio stream metadata, without downloading."""
+def _is_audio_only(fmt: dict) -> bool:
+    if fmt.get("acodec") in (None, "none"):
+        return False
+    vcodec = str(fmt.get("vcodec") or "none").lower()
+    return vcodec in {"", "none", "n/a", "na"}
+
+
+def _audio_bitrate(fmt: dict) -> int:
+    try:
+        value = int(float(fmt.get("abr") or 0))
+    except (TypeError, ValueError):
+        value = 0
+    if value > 512:
+        return 0
+    return value
+
+
+def _audio_only_formats(info: dict) -> list[dict]:
+    return [fmt for fmt in (info or {}).get("formats") or [] if _is_audio_only(fmt)]
+
+
+def probe_audio_options(video_id: str) -> list[dict]:
+    """Usable YouTube audio renditions (never muxed video / 48 kbit/s itags)."""
     try:
         with yt_dlp.YoutubeDL(_ydl_options()) as ydl:
             info = ydl.extract_info(f"https://music.youtube.com/watch?v={video_id}", download=False)
     except Exception as exc:
         logger.debug("Audio-Probe für {} fehlgeschlagen: {}", video_id, exc)
-        return None
+        return []
 
-    formats = [
-        fmt
-        for fmt in (info or {}).get("formats") or []
-        if fmt.get("acodec") not in (None, "none") and (fmt.get("abr") or fmt.get("tbr") or fmt.get("filesize"))
-    ]
-    picked = _pick_format(info or {})
-    best = max(formats, key=lambda fmt: float(fmt.get("abr") or fmt.get("tbr") or 0), default=None) if formats else None
-    fmt = best or picked
-    if not fmt:
+    title = (info or {}).get("title") or ""
+    rows: list[dict] = []
+    seen: set[str] = set()
+    audio_formats = _audio_only_formats(info or {})
+    ranked = sorted(audio_formats, key=_audio_bitrate, reverse=True)
+    preferred = []
+    for fmt in ranked:
+        fid = str(fmt.get("format_id") or "")
+        bitrate = _audio_bitrate(fmt)
+        if fid in _LOW_AUDIO_ITAGS or bitrate < 80:
+            continue
+        preferred.append(fmt)
+    for fmt in audio_formats:
+        if str(fmt.get("format_id") or "") == "140" and fmt not in preferred:
+            preferred.append(fmt)
+    for fmt in preferred:
+        fid = str(fmt.get("format_id") or "")
+        bitrate = _audio_bitrate(fmt) or (128 if fid == "140" else 0)
+        if bitrate < 80:
+            continue
+        key = f"{fid}:{bitrate}"
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            {
+                "bitrate": bitrate,
+                "acodec": (fmt.get("acodec") or "").lower(),
+                "ext": (fmt.get("ext") or "").lower(),
+                "format_id": fid,
+                "title": title,
+            }
+        )
+    return rows
+
+
+def probe_audio(video_id: str) -> dict | None:
+    """Best available audio-only stream metadata, without downloading."""
+    options = probe_audio_options(video_id)
+    if not options:
         return None
-    try:
-        bitrate = int(float(fmt.get("abr") or fmt.get("tbr") or 0))
-    except (TypeError, ValueError):
-        bitrate = 0
-    return {
-        "bitrate": bitrate,
-        "acodec": (fmt.get("acodec") or "").lower(),
-        "ext": (fmt.get("ext") or "").lower(),
-        "format_id": str(fmt.get("format_id") or ""),
-        "title": (info or {}).get("title") or "",
-    }
+    return max(options, key=lambda row: int(row.get("bitrate") or 0))
 
 
 # --------------------------------------------------------------------------

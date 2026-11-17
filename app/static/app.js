@@ -3985,7 +3985,7 @@
       element("p", {
         class: "muted",
         text: ndId
-          ? "Music Play lädt selbst nach Navidrome. 128 kbit/s ist bei YouTube Music üblich; höhere Bitraten erscheinen, wenn YouTube sie wirklich anbietet. Bessere Dateien aus deiner Bibliothek stehen ebenfalls zur Auswahl."
+          ? "Music Play lädt nur YouTube-Audio. 128 kbit/s AAC steht immer zur Auswahl. Schlechtere Dateien (z. B. 48 kbit/s) ersetzen die Bibliothek nicht."
           : "Zum Ersetzen den Titel zuerst nach Navidrome legen.",
       }),
       ...options.map((option) => {
