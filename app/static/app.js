@@ -316,12 +316,12 @@
     return String(track?.navidromeId || "").trim() || (String(track?.id || "").startsWith("nd:") ? String(track.id).slice(3) : "");
   }
 
-  function toast(message) {
+  function toast(message, durationMs = 2800) {
     const node = $("toast");
     node.textContent = message;
     node.hidden = false;
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => (node.hidden = true), 2800);
+    toast.timer = setTimeout(() => (node.hidden = true), Math.max(1200, Number(durationMs) || 2800));
   }
 
   function element(tag, attributes = {}, children = []) {
@@ -2784,12 +2784,14 @@
 
   // -------------------------------------------------------- track actions
 
-  async function waitForJobs(jobs, button) {
+  async function waitForJobs(jobs, button, options = {}) {
     const pending = (jobs || []).filter((job) => job.status === "queued" || job.status === "running");
     let remaining = pending.slice();
-    const deadline = Date.now() + 5 * 60 * 1000;
+    const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 5 * 60 * 1000;
+    const timeoutMessage = options.timeoutMessage || "Navidrome-Import dauert zu lange";
+    const deadline = Date.now() + timeoutMs;
     while (remaining.length) {
-      if (Date.now() > deadline) throw new Error("Navidrome-Import dauert zu lange");
+      if (Date.now() > deadline) throw new Error(timeoutMessage);
       if (button) button.textContent = `↓ ${jobs.length - remaining.length}/${jobs.length}`;
       await new Promise((resolve) => setTimeout(resolve, 1200));
       const updates = await Promise.all(remaining.map((job) => api(`/api/navidrome/job/${job.id}`).catch(() => job)));
@@ -2798,6 +2800,25 @@
       if (failed) throw new Error(failed.error || "Import fehlgeschlagen");
     }
     return Promise.all((jobs || []).map((job) => api(`/api/navidrome/job/${job.id}`).catch(() => job)));
+  }
+
+  function watchReplaceJob(track, option, jobs) {
+    const title = track.title || "Titel";
+    (async () => {
+      try {
+        const finished = await waitForJobs(jobs, null, {
+          timeoutMs: 12 * 60 * 1000,
+          timeoutMessage: "Ersetzen dauert zu lange",
+        });
+        const done = finished[0] || {};
+        if (done.status === "error") throw new Error(done.error || "Ersetzen fehlgeschlagen");
+        applyTrackBitrate(track, done.bitrate || option.bitrate);
+        toast(`„${title}“ ersetzt · ${formatBitrate(track.bitrate || option.bitrate)}`, 3600);
+        refreshOfflineBadges();
+      } catch (error) {
+        toast(error.message || "Ersetzen fehlgeschlagen", 4200);
+      }
+    })();
   }
 
   async function importToNavidrome(tracks, button) {
@@ -3661,9 +3682,8 @@
         );
         if (!confirmed) return;
       }
-      openSheet(heading, [
-        element("p", { class: "muted", text: `Ersetze durch ${formatQualityLabel(option)} …` }),
-      ]);
+      closeSheet();
+      toast(`Ersetzen im Hintergrund · ${formatQualityLabel(option)}`);
       try {
         const result = await api("/api/navidrome/quality/replace", {
           method: "POST",
@@ -3678,21 +3698,11 @@
             artist: track.artist,
           },
         });
-        const jobs = await waitForJobs(result.job ? [result.job] : result.jobs || []);
-        const done = jobs[0] || {};
-        if (done.status === "error") throw new Error(done.error || "Ersetzen fehlgeschlagen");
-        applyTrackBitrate(track, done.bitrate || option.bitrate);
-        closeSheet();
-        toast(`Quelle ersetzt · ${formatBitrate(track.bitrate || option.bitrate)}`);
+        const jobs = result.job ? [result.job] : result.jobs || [];
+        if (!jobs.length) throw new Error("Ersetzen-Auftrag fehlt");
+        watchReplaceJob(track, option, jobs);
       } catch (error) {
-        openSheet(heading, [
-          element("p", { class: "muted", text: error.message }),
-          element("button", {
-            class: "action",
-            text: "Zurück zur Auswahl",
-            onclick: () => openQualitySheet(track),
-          }),
-        ]);
+        toast(error.message || "Ersetzen fehlgeschlagen", 4200);
       }
     };
 
