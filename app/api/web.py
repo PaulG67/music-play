@@ -1023,6 +1023,15 @@ async def list_navidrome_playlists(request: Request):
     return await navidrome.playlist_catalog()
 
 
+@router.get("/navidrome/song/{song_id}")
+async def navidrome_song_details(request: Request, song_id: str):
+    _require_session(request)
+    found = await navidrome.song_details(song_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="Titel in Navidrome nicht gefunden")
+    return found
+
+
 @router.delete("/navidrome/playlist/{playlist_id}")
 async def delete_navidrome_playlist(request: Request, playlist_id: str):
     _require_session(request)

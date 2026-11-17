@@ -156,7 +156,7 @@
 
   function networkErrorMessage(error) {
     const raw = String((error && error.message) || error || "");
-    if (/load failed|failed to fetch|networkerror|aborted|the operation was aborted|network request failed/i.test(raw)) {
+    if (/load failed|failed to fetch|networkerror|aborted|the operation was aborted|network request failed|timeout|timed out/i.test(raw)) {
       return "Verbindung unterbrochen. Bitte erneut versuchen.";
     }
     return raw || "Netzwerkfehler";
@@ -178,15 +178,21 @@
     // Cookie first. Never send Authorization — proxies answer 403 Forbidden.
     if (token && !skipAuth && useTokenHeader) headers["X-Music-Play-Token"] = token;
     let response;
+    const controller = options.signal ? null : new AbortController();
+    const timeoutMs = Number(options.timeout) || 0;
+    const abortTimer = timeoutMs && controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     try {
       response = await fetch(path, {
         credentials: "include",
         headers,
         method,
         body: options.body ? JSON.stringify(options.body) : undefined,
+        signal: options.signal || (controller && controller.signal),
       });
     } catch (error) {
       throw new Error(networkErrorMessage(error));
+    } finally {
+      if (abortTimer) clearTimeout(abortTimer);
     }
     if (response.status === 403 && !retrying && useTokenHeader) {
       return api(path, { ...options, _retried: true, _tokenHeader: false });
@@ -345,6 +351,20 @@
         }),
       ]),
     ]);
+  }
+
+  function setJobBanner(text, kind) {
+    const node = $("job-banner");
+    if (!node) return;
+    if (!text) {
+      node.hidden = true;
+      node.textContent = "";
+      node.className = "job-banner";
+      return;
+    }
+    node.hidden = false;
+    node.className = `job-banner${kind ? ` is-${kind}` : ""}`;
+    node.textContent = text;
   }
 
   function element(tag, attributes = {}, children = []) {
@@ -2811,43 +2831,116 @@
     const pending = (jobs || []).filter((job) => job.status === "queued" || job.status === "running");
     let remaining = pending.slice();
     const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 5 * 60 * 1000;
-    const timeoutMessage = options.timeoutMessage || "Navidrome-Import dauert zu lange";
+    const timeoutMessage = options.timeoutMessage || "Der Auftrag dauert zu lange. Status im Hub oder unter Navidrome prüfen.";
     const deadline = Date.now() + timeoutMs;
+    let misses = 0;
     while (remaining.length) {
       if (Date.now() > deadline) throw new Error(timeoutMessage);
       if (button) button.textContent = `↓ ${jobs.length - remaining.length}/${jobs.length}`;
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      const updates = await Promise.all(remaining.map((job) => api(`/api/navidrome/job/${job.id}`).catch(() => job)));
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const updates = await Promise.all(
+        remaining.map(async (job) => {
+          try {
+            const current = await api(`/api/navidrome/job/${job.id}`, { timeout: 12000 });
+            misses = 0;
+            if (options.onStatus) options.onStatus(current);
+            return current;
+          } catch (error) {
+            misses += 1;
+            if (misses >= 5) throw error;
+            return job;
+          }
+        })
+      );
       remaining = updates.filter((job) => job.status === "queued" || job.status === "running");
       const failed = updates.find((job) => job.status === "error");
-      if (failed) throw new Error(failed.error || "Import fehlgeschlagen");
+      if (failed) throw new Error(failed.error || failed.message || "Auftrag fehlgeschlagen");
     }
-    return Promise.all((jobs || []).map((job) => api(`/api/navidrome/job/${job.id}`).catch(() => job)));
+    return Promise.all(
+      (jobs || []).map((job) => api(`/api/navidrome/job/${job.id}`, { timeout: 12000 }).catch(() => job))
+    );
+  }
+
+  const QUALITY_JOB_KEY = "music_play_quality_job";
+
+  async function watchQualityJob(job, track, option) {
+    const label = option ? formatQualityLabel(option) : "neue Qualität";
+    const title = (track && track.title) || job.title || "Titel";
+    setJobBanner(`${title}: Download läuft · ${label}`);
+    try {
+      sessionStorage.setItem(
+        QUALITY_JOB_KEY,
+        JSON.stringify({
+          id: job.id,
+          title,
+          trackId: track && track.id,
+          bitrate: (option && option.bitrate) || 0,
+        })
+      );
+    } catch (error) {
+      /* private mode */
+    }
+    try {
+      const jobs = await waitForJobs([job], null, {
+        timeoutMs: 16 * 60 * 1000,
+        timeoutMessage: "Ersetzen dauert zu lange. Im Hub prüfen, ob der Download noch läuft.",
+        onStatus: (current) => {
+          const msg = current.message || (current.status === "running" ? "Download läuft …" : "Warte …");
+          setJobBanner(`${title}: ${msg}`);
+        },
+      });
+      const done = jobs[0] || {};
+      if (done.status === "error") throw new Error(done.error || done.message || "Ersetzen fehlgeschlagen");
+      if (done.status !== "done") throw new Error("Download ohne Ergebnis beendet");
+      if (track) applyTrackBitrate(track, done.bitrate || (option && option.bitrate));
+      if (typeof refreshOfflineBadges === "function") refreshOfflineBadges();
+      const bitrateText = formatBitrate((track && track.bitrate) || done.bitrate || (option && option.bitrate));
+      setJobBanner(`Ersetzt · ${bitrateText}`, "done");
+      toast(`Quelle ersetzt · ${bitrateText}`, 6000);
+      showNotice("Ersetzen abgeschlossen", `„${title}“ wurde erfolgreich ersetzt (${bitrateText}).`);
+      setTimeout(() => setJobBanner(""), 6000);
+    } catch (error) {
+      const message = error.message || "Ersetzen fehlgeschlagen";
+      setJobBanner(message, "error");
+      toast(message, 8000);
+      showNotice("Ersetzen fehlgeschlagen", message, { tone: "error" });
+      setTimeout(() => setJobBanner(""), 14000);
+    } finally {
+      try {
+        sessionStorage.removeItem(QUALITY_JOB_KEY);
+      } catch (error) {
+        /* ignore */
+      }
+    }
+  }
+
+  function resumeQualityJob() {
+    let saved;
+    try {
+      saved = JSON.parse(sessionStorage.getItem(QUALITY_JOB_KEY) || "null");
+    } catch (error) {
+      return;
+    }
+    if (!saved || !saved.id) return;
+    api(`/api/navidrome/job/${saved.id}`, { timeout: 8000 })
+      .then((job) => {
+        if (!job) return;
+        if (job.status === "queued" || job.status === "running") {
+          watchQualityJob(job, { id: saved.trackId, title: saved.title, bitrate: 0 }, { bitrate: saved.bitrate });
+        } else if (job.status === "done") {
+          toast(`Quelle ersetzt · ${formatBitrate(job.bitrate || saved.bitrate)}`, 6000);
+          sessionStorage.removeItem(QUALITY_JOB_KEY);
+        } else if (job.status === "error") {
+          toast(job.error || "Ersetzen fehlgeschlagen", 8000);
+          sessionStorage.removeItem(QUALITY_JOB_KEY);
+        }
+      })
+      .catch(() => {});
   }
 
   function watchReplaceJob(track, option, jobs) {
-    const title = track.title || "Titel";
-    (async () => {
-      try {
-        const finished = await waitForJobs(jobs, null, {
-          timeoutMs: 12 * 60 * 1000,
-          timeoutMessage: "Ersetzen dauert zu lange",
-        });
-        const done = finished[0] || {};
-        if (done.status === "error") throw new Error(done.error || "Ersetzen fehlgeschlagen");
-        applyTrackBitrate(track, done.bitrate || option.bitrate);
-        refreshOfflineBadges();
-        const bitrate = formatBitrate(track.bitrate || option.bitrate);
-        showNotice(
-          "Ersetzen abgeschlossen",
-          `„${title}“ wurde erfolgreich ersetzt (${bitrate}).`
-        );
-      } catch (error) {
-        showNotice("Ersetzen fehlgeschlagen", error.message || "Unbekannter Fehler", {
-          tone: "error",
-        });
-      }
-    })();
+    const job = (jobs || [])[0];
+    if (job) watchQualityJob(job, track, option);
   }
 
   async function importToNavidrome(tracks, button) {
@@ -3022,6 +3115,17 @@
       );
     }
 
+    actions.push(
+      element("button", {
+        class: "action",
+        text: "Titelinfo",
+        onclick: () => {
+          closeSheet();
+          openTrackInfoSheet(track);
+        },
+      })
+    );
+
     if (navidromeReady()) {
       actions.push(
         element("button", {
@@ -3135,6 +3239,96 @@
     }
 
     openSheet(`${track.title} · ${track.artist}`, actions);
+  }
+
+  function infoRows(pairs) {
+    const nodes = [];
+    for (const [label, value] of pairs) {
+      const text = value == null || value === "" ? "" : String(value);
+      if (!text) continue;
+      nodes.push(element("dt", { text: label }), element("dd", { text }));
+    }
+    return nodes;
+  }
+
+  async function copyText(value) {
+    const text = String(value || "");
+    if (!text) return;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const field = document.createElement("textarea");
+        field.value = text;
+        field.setAttribute("readonly", "");
+        field.style.position = "fixed";
+        field.style.left = "-9999px";
+        document.body.append(field);
+        field.select();
+        document.execCommand("copy");
+        field.remove();
+      }
+      toast("Kopiert");
+    } catch (error) {
+      toast(text, 8000);
+    }
+  }
+
+  function paintTrackInfo(track, extra = {}) {
+    const info = { ...track, ...extra };
+    const ndPath = info.filePath || info.path || "";
+    const relative = info.relativePath || "";
+    const localPath = info.localPath || "";
+    const storage = relative || ndPath || localPath;
+    const heading = "Titelinfo";
+    const nodes = [
+      element("dl", { class: "info track-info" }, infoRows([
+        ["Titel", info.title],
+        ["Interpret", info.artist],
+        ["Album", info.album],
+        ["Jahr", info.year],
+        ["Dauer", info.duration ? formatTime(info.duration) : ""],
+        ["Bitrate", info.bitrate ? formatBitrate(info.bitrate) : ""],
+        ["Genre", info.genre],
+        ["Titel-Nr.", info.track_no || info.trackNo],
+        ["Navidrome-ID", info.navidromeId || navidromeTrackId(info)],
+        ["Speicherpfad", storage],
+        ["Navidrome-Pfad", ndPath && ndPath !== storage ? ndPath : ""],
+        ["Im Musikordner", info.localFound === true ? localPath || "ja" : info.localFound === false ? "nicht gefunden" : ""],
+      ])),
+    ];
+    if (storage) {
+      nodes.push(
+        element("button", {
+          class: "action",
+          text: "Pfad kopieren",
+          onclick: () => copyText(storage),
+        })
+      );
+    }
+    if (navidromeTrackId(info) && navidromeReady()) {
+      nodes.push(
+        element("p", {
+          class: "muted",
+          text: extra.musicRoot
+            ? `Navidrome-Quelle: ${extra.musicRoot}`
+            : "Pfad kommt aus Navidrome (Report Real Path).",
+        })
+      );
+    }
+    openSheet(heading, nodes);
+  }
+
+  async function openTrackInfoSheet(track) {
+    paintTrackInfo(track);
+    const ndId = navidromeTrackId(track);
+    if (!ndId || !navidromeReady()) return;
+    try {
+      const info = await api(`/api/navidrome/song/${encodeURIComponent(ndId)}`, { timeout: 12000 });
+      paintTrackInfo(track, info);
+    } catch (error) {
+      toast(networkErrorMessage(error));
+    }
   }
 
   async function toggleFavorite(sid, button, forced) {
@@ -3712,10 +3906,11 @@
         if (!confirmed) return;
       }
       closeSheet();
-      toast(`Ersetzen im Hintergrund · ${formatQualityLabel(option)}`);
+      toast(`Download gestartet · ${formatQualityLabel(option)}`, 5000);
       try {
         const result = await api("/api/navidrome/quality/replace", {
           method: "POST",
+          timeout: 20000,
           body: {
             navidromeId: ndId,
             videoId: option.videoId || "",
@@ -3727,11 +3922,12 @@
             artist: track.artist,
           },
         });
-        const jobs = result.job ? [result.job] : result.jobs || [];
-        if (!jobs.length) throw new Error("Ersetzen-Auftrag fehlt");
-        watchReplaceJob(track, option, jobs);
+        const job = result.job || (result.jobs || [])[0];
+        if (!job || !job.id) throw new Error("Auftrag wurde nicht gestartet");
+        watchQualityJob(job, track, option);
       } catch (error) {
         toast(error.message || "Ersetzen fehlgeschlagen", 4200);
+        showNotice("Ersetzen fehlgeschlagen", error.message || "Unbekannter Fehler", { tone: "error" });
       }
     };
 
@@ -4623,6 +4819,7 @@
 
     state.route = { name: "home" };
     render(state.route);
+    resumeQualityJob();
     if (!keepAlive) {
       keepAlive = setInterval(() => {
         if (document.visibilityState === "visible") api("/me").catch(() => api("/api/session")).catch(() => {});

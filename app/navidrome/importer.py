@@ -293,6 +293,7 @@ def job_snapshot(job: dict) -> dict:
         "navidromeId": job.get("navidromeId"),
         "title": job.get("title") or "",
         "bitrate": job.get("bitrate") or 0,
+        "message": job.get("message") or "",
     }
 
 
@@ -300,6 +301,14 @@ def get_job(job_id: str) -> dict | None:
     with _jobs_lock:
         job = _jobs.get(job_id)
         return job_snapshot(job) if job else None
+
+
+def update_job(job_id: str, **fields) -> None:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if job is None:
+            return
+        job.update(fields)
 
 
 def _run(job_id: str, track: dict) -> None:
@@ -633,21 +642,29 @@ def _run_replace(
     try:
         with _jobs_lock:
             _jobs[job_id]["status"] = "running"
+            _jobs[job_id]["message"] = "Download wird vorbereitet …"
         from app.navidrome import quality as nd_quality
 
+        def progress(text: str) -> None:
+            update_job(job_id, status="running", message=text)
+
         if source in {"musikat", "usenet", "youtube"} and candidate:
-            result = nd_quality.replace_via_mediasync(navidrome_id, candidate)
+            result = nd_quality.replace_via_mediasync(navidrome_id, candidate, progress=progress)
         else:
+            progress("Lade von YouTube Music …")
             result = replace_track(navidrome_id, video_id, format_id)
         with _jobs_lock:
             _jobs[job_id]["status"] = "done"
             _jobs[job_id]["navidromeId"] = result.get("navidromeId")
             _jobs[job_id]["bitrate"] = result.get("bitrate") or 0
+            _jobs[job_id]["message"] = "Fertig"
+            _jobs[job_id]["title"] = result.get("title") or _jobs[job_id].get("title") or ""
     except Exception as exc:
         logger.error("Qualitäts-Tausch von {} fehlgeschlagen: {}", navidrome_id, exc)
         with _jobs_lock:
             _jobs[job_id]["status"] = "error"
             _jobs[job_id]["error"] = str(exc)
+            _jobs[job_id]["message"] = str(exc)
     finally:
         with _jobs_lock:
             _inflight.pop(inflight_key, None)
@@ -678,6 +695,7 @@ def start_replace_job(
             "navidromeId": nd_id,
             "title": "",
             "bitrate": 0,
+            "message": "Wartet …",
         }
         _jobs[job_id] = job
         _inflight[inflight_key] = job_id

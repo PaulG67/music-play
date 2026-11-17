@@ -363,6 +363,38 @@ def job(job_id: str) -> dict | None:
     return get_job(job_id)
 
 
+async def song_details(song_id: str) -> dict | None:
+    raw = nd_ids.unwrap(song_id) or song_id
+    if not raw or not config.configured():
+        return None
+
+    def load() -> dict | None:
+        from app.navidrome import artwork
+
+        with NavidromeClient() as client:
+            song = client.get_song(raw)
+        if not song:
+            return None
+        dest = artwork.resolve_audio_path({**song, "navidromeId": raw})
+        relative = artwork.library_relative_path({**song, "navidromeId": raw}, dest)
+        reported = str(song.get("filePath") or song.get("path") or "").strip()
+        return {
+            **song,
+            "navidromeId": raw,
+            "filePath": reported,
+            "relativePath": relative,
+            "localPath": str(dest) if dest is not None else "",
+            "localFound": bool(dest is not None and dest.is_file()),
+            "musicRoot": str(config.music_dir()),
+        }
+
+    try:
+        return await run_in_threadpool(load)
+    except NavidromeError as exc:
+        logger.debug("Navidrome-Titelinfo: {}", exc)
+        return None
+
+
 def search_quality(track: dict) -> dict:
     return nd_quality.search_quality(track)
 
