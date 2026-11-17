@@ -3985,7 +3985,7 @@
       element("p", {
         class: "muted",
         text: ndId
-          ? "YouTube Music hat oft nur 128–256 kbit/s. Echte 320/FLAC kommt nicht von YouTube. Wenn dieselbe Aufnahme schon besser in Navidrome liegt, erscheint sie hier."
+          ? "Music Play lädt selbst nach Navidrome. 128 kbit/s ist bei YouTube Music üblich; höhere Bitraten erscheinen, wenn YouTube sie wirklich anbietet. Bessere Dateien aus deiner Bibliothek stehen ebenfalls zur Auswahl."
           : "Zum Ersetzen den Titel zuerst nach Navidrome legen.",
       }),
       ...options.map((option) => {

@@ -358,8 +358,9 @@ _AUDIO_EXTS = {".m4a", ".mp4", ".mp3", ".webm", ".opus", ".ogg", ".flac", ".wav"
 
 def _ydl_best_options(output_template: str, format_id: str | None = None) -> dict:
     options = _ydl_options(output_template)
-    # Prefer true best audio (often Opus ~160–256). `bestaudio[ext=m4a]` is YouTube 128k.
-    options["format"] = format_id or "bestaudio/best"
+    # Always take YouTube's best audio. A pinned m4a itag is 128k AAC.
+    chosen = (format_id or "").strip()
+    options["format"] = chosen if chosen and chosen not in {"140", "139", "bestaudio[ext=m4a]"} else "bestaudio/best"
     options["overwrites"] = True
     options["writethumbnail"] = False
     options["embedthumbnail"] = False
@@ -569,7 +570,7 @@ def _encode_into(
         ]
 
     attempts = []
-    if _can_copy_audio(source, dest) and (not source_bitrate or source_bitrate >= 200):
+    if _can_copy_audio(source, dest):
         attempts.append(command(True, True))
     attempts.append(command(False, True))
     attempts.append(command(False, False))
@@ -775,7 +776,7 @@ def replace_track(
             wanted_bitrate=wanted_bitrate,
             force_mp3_320=force_mp3_320,
             video_id=video_id,
-            skip_upgrade_check=force_mp3_320,
+            skip_upgrade_check=True,
         )
     finally:
         for leftover in tmp_dir.glob(f"{video_id}*"):
