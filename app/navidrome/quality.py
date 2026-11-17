@@ -441,6 +441,69 @@ def _recover_mediasync_replace(song: dict, dest, nd_id: str, snapshot: tuple) ->
     }
 
 
+def _as_youtube_id(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or text.startswith("nd:"):
+        return ""
+    found = re.search(r"(?:v=|youtu\.be/)([\w-]{11})", text)
+    if found:
+        return found.group(1)
+    if re.fullmatch(r"[\w-]{11}", text):
+        return text
+    return ""
+
+
+def youtube_id_from_candidate(candidate: dict | None) -> str:
+    data = _hub_candidate(candidate or {})
+    match = data.get("match") if isinstance(data.get("match"), dict) else {}
+    for bag in (data, match):
+        for key in ("videoId", "video_id", "id", "url", "webpage_url"):
+            video_id = _as_youtube_id(bag.get(key))
+            if video_id:
+                return video_id
+    return ""
+
+
+def youtube_id_for_track(track: dict) -> str:
+    for item in _collect_candidates(track):
+        video_id = _as_youtube_id(item.get("id"))
+        if video_id:
+            return video_id
+    return ""
+
+
+def resolve_direct_video_id(navidrome_id: str, video_id: str = "", candidate: dict | None = None) -> str:
+    """Pick a YouTube id Music Play can download itself, without MediaSync Hub."""
+    found = _as_youtube_id(video_id) or youtube_id_from_candidate(candidate)
+    if found:
+        return found
+    hints: list[dict] = []
+    candidate_hint = {
+        "title": str((candidate or {}).get("title") or "").strip(),
+        "artist": str((candidate or {}).get("artist") or "").strip(),
+    }
+    if candidate_hint["title"]:
+        hints.append(candidate_hint)
+    if navidrome_id:
+        try:
+            with NavidromeClient() as client:
+                song = client.get_song(navidrome_id) or {}
+            song_hint = {
+                "title": str(song.get("title") or "").strip(),
+                "artist": str(song.get("artist") or "").strip(),
+                "duration": song.get("duration") or 0,
+            }
+            if song_hint["title"]:
+                hints.append(song_hint)
+        except Exception as exc:
+            logger.debug("Titel für direkten Download nicht lesbar: {}", exc)
+    for hint in hints:
+        found = youtube_id_for_track(hint)
+        if found:
+            return found
+    return ""
+
+
 def _hub_candidate(candidate: dict) -> dict:
     data = dict(candidate or {})
     match = data.get("match")

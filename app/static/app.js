@@ -3936,7 +3936,7 @@
       element("p", {
         class: "muted",
         text: ndId
-          ? "YouTube Music und MediaSync-Hub, sortiert nach Bitrate. Titel und Album vor dem Ersetzen prüfen."
+          ? "Treffer aus YouTube Music und dem Hub. Music Play lädt die Datei selbst nach Navidrome, ohne auf den Hub zu warten."
           : "Zum Ersetzen den Titel zuerst nach Navidrome legen.",
       }),
       ...options.map((option) => {

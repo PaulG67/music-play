@@ -648,11 +648,15 @@ def _run_replace(
         def progress(text: str) -> None:
             update_job(job_id, status="running", message=text)
 
-        if source in {"musikat", "usenet", "youtube"} and candidate:
-            result = nd_quality.replace_via_mediasync(navidrome_id, candidate, progress=progress)
-        else:
-            progress("Lade von YouTube Music …")
-            result = replace_track(navidrome_id, video_id, format_id)
+        progress("Suche direkte YouTube-Quelle …")
+        youtube = nd_quality.resolve_direct_video_id(navidrome_id, video_id, candidate)
+        if not youtube:
+            raise RuntimeError(
+                "Keine YouTube-Quelle für den direkten Download gefunden. "
+                "Music Play lädt selbst nach Navidrome und wartet nicht auf den Hub."
+            )
+        progress("Lade selbst nach Navidrome …")
+        result = replace_track(navidrome_id, youtube, format_id)
         with _jobs_lock:
             _jobs[job_id]["status"] = "done"
             _jobs[job_id]["navidromeId"] = result.get("navidromeId")
@@ -685,7 +689,15 @@ def start_replace_job(
     with _jobs_lock:
         existing_id = _inflight.get(inflight_key)
         if existing_id and existing_id in _jobs:
-            return job_snapshot(_jobs[existing_id])
+            existing = _jobs[existing_id]
+            started = float(existing.get("started_at") or 0)
+            still_fresh = existing.get("status") in {"queued", "running"} and started and time.time() - started < 45
+            if still_fresh:
+                return job_snapshot(existing)
+            existing["status"] = "error"
+            existing["error"] = "Neuer direkter Download gestartet"
+            existing["message"] = existing["error"]
+            _inflight.pop(inflight_key, None)
         job_id = uuid.uuid4().hex[:12]
         job = {
             "id": job_id,
@@ -695,7 +707,8 @@ def start_replace_job(
             "navidromeId": nd_id,
             "title": "",
             "bitrate": 0,
-            "message": "Wartet …",
+            "message": "Lade selbst nach Navidrome …",
+            "started_at": time.time(),
         }
         _jobs[job_id] = job
         _inflight[inflight_key] = job_id
