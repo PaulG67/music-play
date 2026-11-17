@@ -3876,18 +3876,8 @@
           }),
         ]
       );
-      // iOS Safari: click on nested <img> is flaky; bind pointer/touch on the button.
-      const activate = (event) => selectCover(item, event);
-      button.addEventListener("click", activate);
-      button.addEventListener(
-        "touchend",
-        (event) => {
-          // Prevent ghost click / scroll-tap misses after selecting an image tile.
-          if (applying) return;
-          activate(event);
-        },
-        { passive: false }
-      );
+      // iOS Safari: nested <img> clicks are flaky; CSS sets pointer-events:none on children.
+      button.addEventListener("click", (event) => selectCover(item, event));
       grid.append(button);
     });
     const saveAlbum = element("button", {
@@ -3954,13 +3944,37 @@
       }
     };
     const bindSave = (button, album) => {
-      const run = (event) => {
+      let touchArmed = false;
+      button.addEventListener(
+        "touchstart",
+        () => {
+          touchArmed = true;
+        },
+        { passive: true }
+      );
+      button.addEventListener(
+        "touchmove",
+        () => {
+          touchArmed = false;
+        },
+        { passive: true }
+      );
+      button.addEventListener(
+        "touchend",
+        (event) => {
+          if (!touchArmed || applying) return;
+          touchArmed = false;
+          event.preventDefault();
+          event.stopPropagation();
+          apply(album);
+        },
+        { passive: false }
+      );
+      button.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
         apply(album);
-      };
-      button.addEventListener("click", run);
-      button.addEventListener("touchend", run, { passive: false });
+      });
     };
     bindSave(saveAlbum, true);
     bindSave(saveFile, false);
