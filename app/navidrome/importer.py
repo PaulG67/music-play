@@ -358,16 +358,38 @@ _AUDIO_EXTS = {".m4a", ".mp4", ".mp3", ".webm", ".opus", ".ogg", ".flac", ".wav"
 
 def _ydl_best_options(output_template: str, format_id: str | None = None) -> dict:
     options = _ydl_options(output_template)
-    options["format"] = format_id or streams.FORMAT_SELECTOR
+    # Prefer true best audio (often Opus ~160–256). `bestaudio[ext=m4a]` is YouTube 128k.
+    options["format"] = format_id or "bestaudio/best"
     options["overwrites"] = True
     options["writethumbnail"] = False
     options["embedthumbnail"] = False
-    options["postprocessors"] = [
-        {"key": "FFmpegExtractAudio", "preferredcodec": "m4a", "preferredquality": "256"},
-        {"key": "FFmpegMetadata", "add_metadata": True},
-    ]
-    options["postprocessor_args"] = {"ffmpeg": ["-movflags", "+faststart"]}
+    options["postprocessors"] = [{"key": "FFmpegMetadata", "add_metadata": True}]
+    options.pop("postprocessor_args", None)
     return options
+
+
+def _bitrate_is_upgrade(got: int, current: int, wanted: int) -> bool:
+    if got <= 0:
+        return False
+    if current and got + 20 < current:
+        return False
+    if wanted >= 280 and got < 200:
+        return False
+    return True
+
+
+def _bitrate_reject_message(got: int, current: int, wanted: int) -> str:
+    if wanted >= 280 and got < 200:
+        return (
+            f"Gewählt waren {wanted} kbit/s, der Download liefert nur {got} kbit/s. "
+            "Die Navidrome-Datei wurde nicht ersetzt."
+        )
+    if current and got + 20 < current:
+        return (
+            f"Download wäre schlechter ({got} statt {current} kbit/s). "
+            "Die Navidrome-Datei wurde nicht ersetzt."
+        )
+    return f"Download mit {got} kbit/s ist unbrauchbar. Datei nicht ersetzt."
 
 
 def _audio_encode_args(suffix: str) -> list[str]:
@@ -507,7 +529,14 @@ def _probe_file_bitrate(path: Path) -> int:
         return 0
 
 
-def _encode_into(source: Path, dest: Path, track: dict, *, work_dir: Path | None = None) -> None:
+def _encode_into(
+    source: Path,
+    dest: Path,
+    track: dict,
+    *,
+    work_dir: Path | None = None,
+    source_bitrate: int = 0,
+) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = _part_path(dest, work_dir)
     tmp.unlink(missing_ok=True)
@@ -540,7 +569,7 @@ def _encode_into(source: Path, dest: Path, track: dict, *, work_dir: Path | None
         ]
 
     attempts = []
-    if _can_copy_audio(source, dest):
+    if _can_copy_audio(source, dest) and (not source_bitrate or source_bitrate >= 200):
         attempts.append(command(True, True))
     attempts.append(command(False, True))
     attempts.append(command(False, False))
@@ -568,7 +597,13 @@ def _encode_into(source: Path, dest: Path, track: dict, *, work_dir: Path | None
         tmp.unlink(missing_ok=True)
 
 
-def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None) -> dict:
+def replace_track(
+    navidrome_id: str,
+    video_id: str,
+    format_id: str | None = None,
+    *,
+    wanted_bitrate: int = 0,
+) -> dict:
     nd_id = (navidrome_id or "").strip()
     video_id = (video_id or "").strip()
     if not nd_id:
@@ -616,15 +651,28 @@ def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None
     audio_hits = [
         path for path in tmp_dir.glob(f"{video_id}*") if path.suffix.lower() in _AUDIO_EXTS
     ]
-    audio_hits.sort(key=lambda path: (path.suffix.lower() != ".m4a", " (2)" in path.stem, path.name))
+    audio_hits.sort(
+        key=lambda path: (
+            path.suffix.lower() not in {".opus", ".webm", ".ogg"},
+            " (2)" in path.stem,
+            path.name,
+        )
+    )
     produced = audio_hits[0] if audio_hits else None
     if produced is None:
         raise RuntimeError("yt-dlp hat keine Audiodatei erzeugt")
 
+    source_bitrate = _probe_file_bitrate(produced)
+    current_bitrate = int(song.get("bitrate") or 0)
+    if not _bitrate_is_upgrade(source_bitrate, current_bitrate, wanted_bitrate):
+        for leftover in tmp_dir.glob(f"{video_id}*"):
+            leftover.unlink(missing_ok=True)
+        raise RuntimeError(_bitrate_reject_message(source_bitrate, current_bitrate, wanted_bitrate))
+
     backup = tmp_dir / f"{nd_id}.bak{original.suffix}"
     try:
         shutil.copy2(original, backup)
-        _encode_into(produced, dest, song, work_dir=tmp_dir)
+        _encode_into(produced, dest, song, work_dir=tmp_dir, source_bitrate=source_bitrate)
         if cover_tmp.is_file():
             try:
                 artwork.embed_image_file(dest, cover_tmp)
@@ -693,15 +741,45 @@ def _run_replace(
         def progress(text: str) -> None:
             update_job(job_id, status="running", message=text)
 
+        wanted = int((candidate or {}).get("bitrate") or 0)
+        hub_error = ""
+        if source in {"musikat", "usenet"} and candidate:
+            progress(
+                f"Lade die gewählte {wanted} kbit/s-Datei über den Hub …"
+                if wanted
+                else "Lade die gewählte Datei über den Hub …"
+            )
+            try:
+                result = nd_quality.replace_via_mediasync(navidrome_id, candidate, progress=progress)
+                got = int(result.get("bitrate") or 0)
+                if _bitrate_is_upgrade(got, 0, wanted) or (wanted and got + 24 >= wanted):
+                    with _jobs_lock:
+                        _jobs[job_id]["status"] = "done"
+                        _jobs[job_id]["navidromeId"] = result.get("navidromeId")
+                        _jobs[job_id]["bitrate"] = got
+                        _jobs[job_id]["message"] = "Fertig"
+                        _jobs[job_id]["title"] = result.get("title") or _jobs[job_id].get("title") or ""
+                    return
+                hub_error = f"Hub lieferte {got or 'keine'} kbit/s statt {wanted or 'der gewählten Qualität'}"
+            except Exception as exc:
+                hub_error = str(exc)
+                logger.warning("Hub-Qualität {} nicht nutzbar: {}", source, exc)
+            progress("Hub-Download ungeeignet, prüfe YouTube …")
+
         progress("Suche direkte YouTube-Quelle …")
         youtube = nd_quality.resolve_direct_video_id(navidrome_id, video_id, candidate)
         if not youtube:
             raise RuntimeError(
-                "Keine YouTube-Quelle für den direkten Download gefunden. "
-                "Music Play lädt selbst nach Navidrome und wartet nicht auf den Hub."
+                hub_error
+                or "Keine YouTube-Quelle für den direkten Download gefunden."
             )
         progress("Lade selbst nach Navidrome …")
-        result = replace_track(navidrome_id, youtube, format_id)
+        try:
+            result = replace_track(navidrome_id, youtube, format_id, wanted_bitrate=wanted)
+        except Exception as exc:
+            if hub_error:
+                raise RuntimeError(f"{exc} Hub: {hub_error}") from exc
+            raise
         with _jobs_lock:
             _jobs[job_id]["status"] = "done"
             _jobs[job_id]["navidromeId"] = result.get("navidromeId")

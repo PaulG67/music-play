@@ -2892,12 +2892,18 @@
       const done = jobs[0] || {};
       if (done.status === "error") throw new Error(done.error || done.message || "Ersetzen fehlgeschlagen");
       if (done.status !== "done") throw new Error("Download ohne Ergebnis beendet");
-      if (track) applyTrackBitrate(track, done.bitrate || (option && option.bitrate));
+      const shown = Number(done.bitrate) || 0;
+      if (track && shown) applyTrackBitrate(track, shown);
       if (typeof refreshOfflineBadges === "function") refreshOfflineBadges();
-      const bitrateText = formatBitrate((track && track.bitrate) || done.bitrate || (option && option.bitrate));
+      const bitrateText = formatBitrate(shown || (track && track.bitrate));
+      const wanted = Number(option && option.bitrate) || 0;
+      const detail =
+        wanted && shown && shown + 24 < wanted
+          ? `„${title}“ wurde ersetzt, aber nur mit ${bitrateText} statt ${formatBitrate(wanted)}.`
+          : `„${title}“ wurde erfolgreich ersetzt (${bitrateText}).`;
       setJobBanner(`Ersetzt · ${bitrateText}`, "done");
       toast(`Quelle ersetzt · ${bitrateText}`, 6000);
-      showNotice("Ersetzen abgeschlossen", `„${title}“ wurde erfolgreich ersetzt (${bitrateText}).`);
+      showNotice("Ersetzen abgeschlossen", detail);
       setTimeout(() => setJobBanner(""), 6000);
     } catch (error) {
       const message = error.message || "Ersetzen fehlgeschlagen";
@@ -3936,7 +3942,7 @@
       element("p", {
         class: "muted",
         text: ndId
-          ? "Treffer aus YouTube Music und dem Hub. Music Play lädt die Datei selbst nach Navidrome, ohne auf den Hub zu warten."
+          ? "320 kbit/s kommt vom Hub (MusiKat/Usenet). YouTube allein liefert oft nur 128 kbit/s – dann wird die Datei nicht ersetzt."
           : "Zum Ersetzen den Titel zuerst nach Navidrome legen.",
       }),
       ...options.map((option) => {

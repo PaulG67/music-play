@@ -557,7 +557,7 @@ def replace_via_mediasync(navidrome_id: str, candidate: dict, progress=None) -> 
     source = str(candidate.get("source") or "")
     artist = str(candidate.get("artist") or song.get("artist") or "").strip()
     title = str(candidate.get("title") or song.get("title") or "").strip()
-    wait_s = 720 if source == "musikat" else 300
+    wait_s = 240 if source == "musikat" else 180
 
     def note(text: str) -> None:
         logger.info("Qualität: {}", text)
