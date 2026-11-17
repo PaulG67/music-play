@@ -1220,7 +1220,7 @@ async def navidrome_quality_replace(request: Request, payload: dict = Body(...))
     if not navidrome_id:
         raise HTTPException(status_code=400, detail="Titel ist nicht in Navidrome")
     if not video_id or video_id.startswith("nd:"):
-        if source in {"musikat", "usenet", "youtube", "deezer"} and candidate:
+        if source in {"library", "musikat", "usenet", "youtube", "deezer"} and candidate:
             video_id = ""
         else:
             raise HTTPException(status_code=400, detail="videoId fehlt")

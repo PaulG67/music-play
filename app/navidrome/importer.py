@@ -597,11 +597,22 @@ def _encode_into(
         tmp.unlink(missing_ok=True)
 
 
-def _replace_dest(original: Path, song: dict, *, force_mp3_320: bool) -> Path:
+def _replace_dest(
+    original: Path,
+    song: dict,
+    *,
+    force_mp3_320: bool,
+    produced: Path | None = None,
+    prefer_source_container: bool = False,
+) -> Path:
     dest = _canonical_replace_path(original, song)
+    stem = _DUP_STEM.sub("", dest.stem).strip() or dest.stem
     if force_mp3_320:
-        stem = _DUP_STEM.sub("", dest.stem).strip() or dest.stem
         return dest.with_name(f"{stem}.mp3")
+    if prefer_source_container and produced is not None:
+        suffix = produced.suffix.lower()
+        if suffix in _KEEP_AUDIO | {".flac", ".wav"}:
+            return dest.with_name(f"{stem}{suffix}")
     if dest.suffix.lower() in _WEAK_AUDIO:
         return dest.with_suffix(".m4a")
     return dest
@@ -615,6 +626,7 @@ def install_file(
     force_mp3_320: bool = False,
     video_id: str = "",
     skip_upgrade_check: bool = False,
+    prefer_source_container: bool = False,
 ) -> dict:
     nd_id = (navidrome_id or "").strip()
     if not nd_id:
@@ -643,7 +655,18 @@ def install_file(
             f"Musikordner muss dieselbe Freigabe wie Navidrome sein ({config.music_dir()})."
         )
     original = _canonical_replace_path(original, song)
-    dest = _replace_dest(original, song, force_mp3_320=force_mp3_320)
+    dest = _replace_dest(
+        original,
+        song,
+        force_mp3_320=force_mp3_320,
+        produced=produced,
+        prefer_source_container=prefer_source_container,
+    )
+    try:
+        if original.resolve() == produced.resolve():
+            raise RuntimeError("Quelle und Zieldatei sind dieselbe Datei")
+    except OSError:
+        pass
 
     source_bitrate = _probe_file_bitrate(produced)
     current_bitrate = int(song.get("bitrate") or 0)
@@ -778,51 +801,29 @@ def _run_replace(
             update_job(job_id, status="running", message=text)
 
         wanted = int((candidate or {}).get("bitrate") or 0)
-        catalog_error = ""
-        as_mp3_320 = source in {"musikat", "deezer", "usenet"} or wanted >= 280
-        from app.musikat import config as mk_config
-
-        if source in {"musikat", "deezer"} and candidate and mk_config.resolve_url():
-            progress(
-                f"Lade über MusiKat als MP3 {wanted or 320} …"
-                if wanted
-                else "Lade über MusiKat …"
-            )
-            try:
-                result = nd_quality.replace_via_musikat(navidrome_id, candidate, progress=progress)
-                got = int(result.get("bitrate") or 0)
-                with _jobs_lock:
-                    _jobs[job_id]["status"] = "done"
-                    _jobs[job_id]["navidromeId"] = result.get("navidromeId")
-                    _jobs[job_id]["bitrate"] = got
-                    _jobs[job_id]["message"] = "Fertig"
-                    _jobs[job_id]["title"] = result.get("title") or _jobs[job_id].get("title") or ""
-                return
-            except Exception as exc:
-                catalog_error = str(exc)
-                logger.warning("MusiKat-Download nicht nutzbar: {}", exc)
-            progress("MusiKat nicht nutzbar, lade selbst von YouTube …")
+        if source == "library" and candidate:
+            progress("Kopiere bessere Datei aus der Navidrome-Bibliothek …")
+            result = nd_quality.replace_via_library(navidrome_id, candidate, progress=progress)
+            with _jobs_lock:
+                _jobs[job_id]["status"] = "done"
+                _jobs[job_id]["navidromeId"] = result.get("navidromeId")
+                _jobs[job_id]["bitrate"] = int(result.get("bitrate") or 0)
+                _jobs[job_id]["message"] = "Fertig"
+                _jobs[job_id]["title"] = result.get("title") or _jobs[job_id].get("title") or ""
+            return
 
         progress("Suche direkte YouTube-Quelle …")
         youtube = nd_quality.resolve_direct_video_id(navidrome_id, video_id, candidate)
         if not youtube:
-            raise RuntimeError(
-                catalog_error
-                or "Keine YouTube-Quelle für den direkten Download gefunden."
-            )
+            raise RuntimeError("Keine YouTube-Quelle für den direkten Download gefunden.")
         progress("Lade selbst nach Navidrome …")
-        try:
-            result = replace_track(
-                navidrome_id,
-                youtube,
-                format_id,
-                wanted_bitrate=wanted,
-                force_mp3_320=as_mp3_320,
-            )
-        except Exception as exc:
-            if catalog_error:
-                raise RuntimeError(f"{exc} MusiKat: {catalog_error}") from exc
-            raise
+        result = replace_track(
+            navidrome_id,
+            youtube,
+            format_id,
+            wanted_bitrate=wanted,
+            force_mp3_320=False,
+        )
         with _jobs_lock:
             _jobs[job_id]["status"] = "done"
             _jobs[job_id]["navidromeId"] = result.get("navidromeId")

@@ -29,6 +29,7 @@ _RELEASE_HINT = re.compile(
 _SOURCE_LABELS = {
     "ytm": "YouTube Music",
     "youtube": "YouTube",
+    "library": "Navidrome-Bibliothek",
     "musikat": "MusiKat",
     "deezer": "Deezer-Katalog",
     "usenet": "Usenet",
@@ -267,6 +268,73 @@ def _option_from_mediasync(raw: dict, source: str, query_title: str, query_artis
     }
 
 
+def _library_quality_options(track: dict) -> list[dict]:
+    nd_id = _navidrome_id(track)
+    title = (track.get("title") or "").strip()
+    artist = (track.get("artist") or "").strip()
+    current = int(track.get("bitrate") or 0)
+    if not title or not config.configured():
+        return []
+    query = " ".join(part for part in (artist, title) if part).strip()
+    try:
+        with NavidromeClient() as client:
+            found = client.search(query, songs=25, albums=0, artists=0)
+    except Exception as exc:
+        logger.debug("Bibliothekssuche für Qualität fehlgeschlagen: {}", exc)
+        return []
+    options: list[dict] = []
+    seen: set[str] = set()
+    for song in found.get("songs") or []:
+        other_id = str(song.get("id") or song.get("navidromeId") or "").strip()
+        if not other_id or other_id == nd_id or other_id in seen:
+            continue
+        if not nd_match.titles_match(title, song.get("title") or ""):
+            continue
+        if artist and not nd_match.artists_match(artist, song.get("artist") or ""):
+            continue
+        bitrate = int(song.get("bitrate") or 0)
+        if not bitrate or (current and bitrate <= current + 8):
+            continue
+        seen.add(other_id)
+        path = str(song.get("path") or song.get("filePath") or "")
+        ext = Path(path).suffix.lower().lstrip(".") if path else ""
+        codec = _codec_label("", ext)
+        album = str(song.get("album") or "").strip()
+        options.append(
+            {
+                "videoId": "",
+                "source": "library",
+                "sourceLabel": _SOURCE_LABELS["library"],
+                "title": song.get("title") or title,
+                "artist": song.get("artist") or artist,
+                "album": album,
+                "detail": album,
+                "duration": song.get("duration") or 0,
+                "bitrate": bitrate,
+                "codec": codec,
+                "ext": ext,
+                "formatId": "",
+                "candidate": {
+                    "id": f"library:{other_id}"[:120],
+                    "source": "library",
+                    "source_label": _SOURCE_LABELS["library"],
+                    "navidromeId": other_id,
+                    "artist": song.get("artist") or artist,
+                    "title": song.get("title") or title,
+                    "album": album,
+                    "path": path,
+                    "bitrate": bitrate,
+                    "match": {
+                        "navidromeId": other_id,
+                        "path": path,
+                        "bitrate": bitrate,
+                    },
+                },
+            }
+        )
+    return options
+
+
 def _catalog_row_artist(raw: dict) -> str:
     artist = raw.get("artist") or raw.get("artists") or ""
     if isinstance(artist, dict):
@@ -452,7 +520,7 @@ def search_quality(track: dict) -> dict:
     options: list[dict] = []
     with ThreadPoolExecutor(max_workers=_PROBE_WORKERS) as pool:
         futures = [pool.submit(_probe_item, item) for item in _collect_candidates(data)]
-        futures.append(pool.submit(_catalog_quality_options, data))
+        futures.append(pool.submit(_library_quality_options, data))
         for future in as_completed(futures):
             try:
                 result = future.result()
@@ -652,6 +720,42 @@ def _hub_candidate(candidate: dict) -> dict:
         merged["match"] = match
         return merged
     return data
+
+
+def replace_via_library(navidrome_id: str, candidate: dict, progress=None) -> dict:
+    from app.navidrome import artwork
+    from app.navidrome.importer import install_file
+
+    data = _hub_candidate(candidate or {})
+    match = data.get("match") if isinstance(data.get("match"), dict) else {}
+    other_id = str(
+        data.get("navidromeId") or match.get("navidromeId") or match.get("id") or ""
+    ).strip()
+    if not other_id:
+        raise RuntimeError("Keine Bibliotheks-Datei ausgewählt")
+    if other_id == str(navidrome_id or "").strip():
+        raise RuntimeError("Das ist dieselbe Navidrome-Datei")
+
+    def note(text: str) -> None:
+        logger.info("Qualität: {}", text)
+        if callable(progress):
+            progress(text)
+
+    note("Lese bessere Datei aus der Bibliothek …")
+    with NavidromeClient() as client:
+        other = client.get_song(other_id)
+    if not other:
+        raise RuntimeError("Ausgewählte Bibliotheksdatei nicht gefunden")
+    produced = artwork.resolve_audio_path({**other, "navidromeId": other_id})
+    if produced is None or not produced.is_file():
+        raise RuntimeError("Die bessere Bibliotheksdatei ist lokal nicht lesbar")
+    note(f"Kopiere {produced.name} …")
+    return install_file(
+        navidrome_id,
+        produced,
+        wanted_bitrate=int(other.get("bitrate") or data.get("bitrate") or 0),
+        prefer_source_container=True,
+    )
 
 
 def replace_via_musikat(navidrome_id: str, candidate: dict, progress=None) -> dict:

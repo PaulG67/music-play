@@ -2442,9 +2442,9 @@
       "MusiKat",
       mk.configured
         ? mk.reachable
-          ? "Music Play sucht und lädt 320-kbit/s-MP3 direkt bei MusiKat, ohne den MediaSync-Hub."
+          ? "MusiKat ist verbunden, wird für den Qualitäts-Tausch aber nicht mehr genutzt – dort kommt dieselbe YouTube-Qualität an."
           : "Gespeichert, aber MusiKat antwortet nicht. URL prüfen – im LAN z. B. http://192.168.0.219:8000."
-        : "URL deiner MusiKat-App. Ohne URL sucht Music Play den Titel im Deezer-Katalog und speichert selbst MP3 320 nach Navidrome.",
+        : "Optional. Für den Qualitäts-Tausch nicht nötig: MusiKat lädt keine echte höhere Bitrate als YouTube Music.",
       ICONS.disc,
       [
       element("div", { class: "settings-form" }, [
@@ -3985,7 +3985,7 @@
       element("p", {
         class: "muted",
         text: ndId
-          ? "MusiKat sucht den Titel im Deezer-Katalog und speichert MP3 320. Das ist nicht dieselbe YouTube-Music-Datei in höherer Qualität – YouTube Music selbst bietet oft nur 128–256 kbit/s."
+          ? "YouTube Music hat oft nur 128–256 kbit/s. Echte 320/FLAC kommt nicht von YouTube. Wenn dieselbe Aufnahme schon besser in Navidrome liegt, erscheint sie hier."
           : "Zum Ersetzen den Titel zuerst nach Navidrome legen.",
       }),
       ...options.map((option) => {
