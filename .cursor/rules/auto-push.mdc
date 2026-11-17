@@ -1,14 +1,17 @@
 ---
-description: Nach abgeschlossener Arbeit immer committen und nach GitHub pushen
+description: Nach abgeschlossener Arbeit immer committen, pushen und auf main mergen
 alwaysApply: true
 ---
 
-# Auto-Commit und Auto-Push
+# Auto-Commit, Auto-Push und Main-Merge
 
 Für dieses Repo gilt (überschreibt die allgemeine Zurückhaltung bei Commit/Push):
 
 - Nach abgeschlossener, sinnvoller Änderung: committen und sofort `git push -u origin HEAD` ausführen. Nicht extra nachfragen.
+- Danach die Änderung **selbst auf `main` mergen und `main` pushen**, damit der GHCR-Workflow läuft und Unraid „Force update“ ein neues Image sieht. Nicht auf dem Feature-Branch stehen lassen und den User zum Mergen auffordern.
+- PR anlegen ist ok, aber Merge/`main`-Push nicht vom User abhängig machen, wenn die Arbeit fertig und getestet ist.
 - Commit-Message auf Englisch, 1–2 Sätze, Fokus auf das Warum. Keine Secrets (`.env`, Passwörter, Tokens).
 - Nie `--force` / `--force-with-lease` auf `main`/`master`. Nie `--no-verify`.
 - Leere Commits vermeiden. Hooks nicht umgehen.
 - Ein `post-commit`-Hook pusht zusätzlich; trotzdem selbst pushen, falls der Hook fehlt.
+- Kurz im Abschluss sagen, dass `main` und GHCR `latest` aktualisiert sind (bzw. der Publish-Run läuft).
