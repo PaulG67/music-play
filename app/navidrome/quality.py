@@ -7,6 +7,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+import httpx
+
 from app.core.logging import logger
 from app.navidrome import config
 from app.navidrome import ids as nd_ids
@@ -26,9 +28,10 @@ _RELEASE_HINT = re.compile(
 
 _SOURCE_LABELS = {
     "ytm": "YouTube Music",
-    "youtube": "MediaSync · YouTube",
-    "musikat": "MediaSync · MusiKat",
-    "usenet": "MediaSync · Usenet",
+    "youtube": "YouTube",
+    "musikat": "MusiKat",
+    "deezer": "Deezer-Katalog",
+    "usenet": "Usenet",
 }
 
 
@@ -264,6 +267,143 @@ def _option_from_mediasync(raw: dict, source: str, query_title: str, query_artis
     }
 
 
+def _catalog_row_artist(raw: dict) -> str:
+    artist = raw.get("artist") or raw.get("artists") or ""
+    if isinstance(artist, dict):
+        return str(artist.get("name") or "").strip()
+    if isinstance(artist, list) and artist:
+        first = artist[0]
+        if isinstance(first, dict):
+            return str(first.get("name") or "").strip()
+        return str(first).strip()
+    return str(artist or "").strip()
+
+
+def _catalog_row_album(raw: dict) -> str:
+    album = raw.get("album") or ""
+    if isinstance(album, dict):
+        return str(album.get("title") or album.get("name") or "").strip()
+    return str(album or "").strip()
+
+
+def _deezer_tracks(artist: str, title: str) -> list[dict]:
+    query = " ".join(part for part in (artist, title) if part).strip()
+    if not query:
+        return []
+    try:
+        response = httpx.get(
+            "https://api.deezer.com/search/track",
+            params={"q": query, "limit": 8},
+            timeout=12.0,
+            headers={"User-Agent": "MusicPlay"},
+        )
+        response.raise_for_status()
+        rows = response.json().get("data") or []
+    except Exception as exc:
+        logger.debug("Deezer-Katalogsuche fehlgeschlagen: {}", exc)
+        return []
+    found: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        found.append(
+            {
+                "id": row.get("id"),
+                "name": row.get("title") or title,
+                "artist": (row.get("artist") or {}).get("name") or artist,
+                "album": (row.get("album") or {}).get("title") or "",
+                "duration": row.get("duration") or 0,
+            }
+        )
+    return found
+
+
+def _option_from_catalog(
+    raw: dict,
+    source: str,
+    source_label: str,
+    query_title: str,
+    query_artist: str,
+) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    title = str(raw.get("name") or raw.get("title") or query_title or "").strip()
+    artist = _catalog_row_artist(raw) or query_artist
+    album = _catalog_row_album(raw)
+    track_id = str(raw.get("id") or raw.get("track_id") or "").strip()
+    if not title or not track_id:
+        return None
+    if query_title and not nd_match.titles_match(query_title, title):
+        return None
+    if query_artist and artist and not nd_match.artists_match(query_artist, artist):
+        return None
+    duration = raw.get("duration") or 0
+    if raw.get("duration_ms"):
+        try:
+            duration = int(round(int(raw["duration_ms"]) / 1000))
+        except (TypeError, ValueError):
+            pass
+    return {
+        "videoId": "",
+        "source": source,
+        "sourceLabel": source_label,
+        "title": title,
+        "artist": artist,
+        "album": album,
+        "detail": album,
+        "duration": duration or 0,
+        "bitrate": 320,
+        "codec": "MP3",
+        "ext": "mp3",
+        "formatId": "",
+        "candidate": {
+            "id": f"{source}:{track_id}"[:120],
+            "source": source,
+            "source_label": source_label,
+            "artist": artist,
+            "title": title,
+            "album": album,
+            "track_id": track_id,
+            "provider": "deezer",
+            "bitrate": 320,
+            "match": raw,
+        },
+    }
+
+
+def _catalog_quality_options(track: dict) -> list[dict]:
+    from app.musikat import client as mk
+    from app.musikat import config as mk_config
+
+    artist = (track.get("artist") or "").strip()
+    title = (track.get("title") or "").strip()
+    if not title:
+        return []
+    via_musikat = bool(mk_config.resolve_url())
+    rows = mk.search_tracks(artist, title) if via_musikat else []
+    source = "musikat" if rows else "deezer"
+    label = _SOURCE_LABELS[source]
+    if not rows:
+        rows = _deezer_tracks(artist, title)
+        source = "deezer"
+        label = _SOURCE_LABELS["deezer"]
+    elif via_musikat:
+        source = "musikat"
+        label = _SOURCE_LABELS["musikat"]
+    options: list[dict] = []
+    seen: set[str] = set()
+    for raw in rows:
+        option = _option_from_catalog(raw, source, label, title, artist)
+        if not option:
+            continue
+        key = str((option.get("candidate") or {}).get("id") or option.get("title"))
+        if key in seen:
+            continue
+        seen.add(key)
+        options.append(option)
+    return options
+
+
 def _mediasync_options(track: dict) -> list[dict]:
     from app.mediasync import config as ms_config
     from app.mediasync.client import MediaSyncClient
@@ -312,7 +452,7 @@ def search_quality(track: dict) -> dict:
     options: list[dict] = []
     with ThreadPoolExecutor(max_workers=_PROBE_WORKERS) as pool:
         futures = [pool.submit(_probe_item, item) for item in _collect_candidates(data)]
-        futures.append(pool.submit(_mediasync_options, data))
+        futures.append(pool.submit(_catalog_quality_options, data))
         for future in as_completed(futures):
             try:
                 result = future.result()
@@ -512,6 +652,65 @@ def _hub_candidate(candidate: dict) -> dict:
         merged["match"] = match
         return merged
     return data
+
+
+def replace_via_musikat(navidrome_id: str, candidate: dict, progress=None) -> dict:
+    from app.musikat import client as mk
+    from app.musikat.client import MusiKatError
+    from app.navidrome.importer import install_file
+
+    data = _hub_candidate(candidate or {})
+    match = data.get("match") if isinstance(data.get("match"), dict) else {}
+    track_id = str(
+        data.get("track_id")
+        or match.get("id")
+        or match.get("track_id")
+        or ""
+    ).strip()
+    if not track_id:
+        raise RuntimeError("Keine MusiKat-Titel-Id")
+
+    def note(text: str) -> None:
+        logger.info("Qualität: {}", text)
+        if callable(progress):
+            progress(text)
+
+    note("Starte Download bei MusiKat …")
+    try:
+        outcome = mk.download_track(track_id, progress=note)
+    except MusiKatError as exc:
+        if exc.exists:
+            raise RuntimeError(
+                "MusiKat kennt den Titel schon in der Bibliothek. "
+                "Music Play lädt ihn deshalb selbst von YouTube als MP3 320."
+            ) from exc
+        raise RuntimeError(str(exc)) from exc
+
+    status = str(outcome.get("status") or "").lower()
+    if status in {"error", "failed"}:
+        raise RuntimeError(
+            str(outcome.get("message") or outcome.get("error") or "MusiKat-Download fehlgeschlagen")
+        )
+    produced = mk.map_library_file(str(outcome.get("file_path") or ""))
+    if produced is None:
+        raise RuntimeError(
+            "MusiKat-Datei in der Navidrome-Quelle nicht sichtbar. "
+            "Music Play lädt selbst von YouTube."
+        )
+    result = install_file(
+        navidrome_id,
+        produced,
+        wanted_bitrate=320,
+        force_mp3_320=True,
+        skip_upgrade_check=True,
+    )
+    dest = Path(str(result.get("path") or ""))
+    try:
+        if produced.is_file() and dest.is_file() and produced.resolve() != dest.resolve():
+            produced.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return result
 
 
 def replace_via_mediasync(navidrome_id: str, candidate: dict, progress=None) -> dict:

@@ -19,6 +19,8 @@ from app.services import translate as translate_service
 from app.mediasync import bridge as mediasync
 from app.mediasync import config as mediasync_config
 from app.mediasync.client import MediaSyncError
+from app.musikat import config as musikat_config
+from app.musikat.client import MusiKatClient
 from app.navidrome import artwork as nd_artwork
 from app.navidrome import bridge as navidrome
 from app.navidrome import config as navidrome_config
@@ -909,6 +911,19 @@ async def sponsorblock(request: Request, video_id: str):
     return {"segments": await extras.skip_segments(video_id)}
 
 
+def musikat_status() -> dict:
+    view = musikat_config.public_view()
+    if not view["configured"]:
+        return {**view, "reachable": False}
+    try:
+        with MusiKatClient() as client:
+            ping = client.ping()
+        return {**view, "reachable": True, "version": ping.get("version") or ""}
+    except Exception as exc:
+        logger.debug("MusiKat-Status: {}", exc)
+        return {**view, "reachable": False, "error": str(exc)}
+
+
 @router.get("/status")
 async def status(request: Request):
     user = _require_session(request)
@@ -934,6 +949,7 @@ async def status(request: Request):
         "ytmAccount": ytm.is_authenticated(),
         "navidrome": navidrome.status(),
         "mediasync": mediasync.status(),
+        "musikat": musikat_status(),
     }
 
 
@@ -1204,7 +1220,7 @@ async def navidrome_quality_replace(request: Request, payload: dict = Body(...))
     if not navidrome_id:
         raise HTTPException(status_code=400, detail="Titel ist nicht in Navidrome")
     if not video_id or video_id.startswith("nd:"):
-        if source in {"musikat", "usenet", "youtube"} and candidate:
+        if source in {"musikat", "usenet", "youtube", "deezer"} and candidate:
             video_id = ""
         else:
             raise HTTPException(status_code=400, detail="videoId fehlt")
@@ -1216,6 +1232,34 @@ async def navidrome_quality_replace(request: Request, payload: dict = Body(...))
         candidate=candidate,
     )
     return {"job": job}
+
+
+# --------------------------------------------------------------------------
+# MusiKat
+# --------------------------------------------------------------------------
+
+
+@router.get("/musikat")
+async def musikat_get(request: Request):
+    _require_session(request)
+    return musikat_status()
+
+
+@router.put("/musikat")
+async def save_musikat(request: Request, payload: dict = Body(...)):
+    _require_session(request)
+    url = (payload.get("url") or "").strip().rstrip("/")
+    if url:
+        try:
+            def ping() -> dict:
+                with MusiKatClient(url) as client:
+                    return client.ping()
+
+            await run_in_threadpool(ping)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Verbindung fehlgeschlagen: {exc}") from exc
+    musikat_config.save({"url": url})
+    return musikat_status() | {"ok": True}
 
 
 # --------------------------------------------------------------------------

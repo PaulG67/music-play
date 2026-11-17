@@ -597,19 +597,30 @@ def _encode_into(
         tmp.unlink(missing_ok=True)
 
 
-def replace_track(
+def _replace_dest(original: Path, song: dict, *, force_mp3_320: bool) -> Path:
+    dest = _canonical_replace_path(original, song)
+    if force_mp3_320:
+        stem = _DUP_STEM.sub("", dest.stem).strip() or dest.stem
+        return dest.with_name(f"{stem}.mp3")
+    if dest.suffix.lower() in _WEAK_AUDIO:
+        return dest.with_suffix(".m4a")
+    return dest
+
+
+def install_file(
     navidrome_id: str,
-    video_id: str,
-    format_id: str | None = None,
+    produced: Path,
     *,
     wanted_bitrate: int = 0,
+    force_mp3_320: bool = False,
+    video_id: str = "",
+    skip_upgrade_check: bool = False,
 ) -> dict:
     nd_id = (navidrome_id or "").strip()
-    video_id = (video_id or "").strip()
     if not nd_id:
         raise RuntimeError("Navidrome-Id fehlt")
-    if not video_id or video_id.startswith("nd:"):
-        raise RuntimeError("YouTube-Id fehlt")
+    if not produced.is_file():
+        raise RuntimeError("Ersatzdatei nicht gefunden")
     if not config.configured():
         raise RuntimeError("Navidrome ist nicht konfiguriert")
     if not config.music_dir_writable():
@@ -625,23 +636,95 @@ def replace_track(
 
     from app.navidrome import artwork
 
-    dest = artwork.resolve_audio_path({**song, "navidromeId": nd_id})
-    if dest is None or not dest.is_file():
+    original = artwork.resolve_audio_path({**song, "navidromeId": nd_id})
+    if original is None or not original.is_file():
         raise RuntimeError(
             "Audiodatei in der Navidrome-Quelle nicht gefunden. "
             f"Musikordner muss dieselbe Freigabe wie Navidrome sein ({config.music_dir()})."
         )
-    dest = _canonical_replace_path(dest, song)
-    original = dest
-    if dest.suffix.lower() in _WEAK_AUDIO:
-        dest = dest.with_suffix(".m4a")
+    original = _canonical_replace_path(original, song)
+    dest = _replace_dest(original, song, force_mp3_320=force_mp3_320)
+
+    source_bitrate = _probe_file_bitrate(produced)
+    current_bitrate = int(song.get("bitrate") or 0)
+    if not skip_upgrade_check and not _bitrate_is_upgrade(source_bitrate, current_bitrate, wanted_bitrate):
+        raise RuntimeError(_bitrate_reject_message(source_bitrate, current_bitrate, wanted_bitrate))
 
     tmp_dir = settings.audio_cache_dir / "quality"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     cover_tmp = tmp_dir / f"{nd_id}.cover.jpg"
     _extract_cover(original, cover_tmp)
+    backup = tmp_dir / f"{nd_id}.bak{original.suffix}"
+    try:
+        shutil.copy2(original, backup)
+        _encode_into(produced, dest, song, work_dir=tmp_dir, source_bitrate=source_bitrate)
+        if cover_tmp.is_file():
+            try:
+                artwork.embed_image_file(dest, cover_tmp)
+            except Exception as exc:
+                logger.warning("Cover nach Qualitäts-Tausch nicht eingebettet: {}", exc)
+    except Exception:
+        if backup.is_file():
+            shutil.copy2(backup, original)
+        raise
+    if dest != original and dest.is_file() and original.is_file():
+        original.unlink(missing_ok=True)
+    backup.unlink(missing_ok=True)
+    cover_tmp.unlink(missing_ok=True)
 
-    logger.info("Ersetze Navidrome-Datei {} durch YouTube {}", dest, video_id)
+    bitrate = _probe_file_bitrate(dest)
+    updated = None
+    with NavidromeClient() as client:
+        _wait_for_scan(client, timeout=6)
+        deadline = time.time() + 12
+        while time.time() < deadline:
+            updated = client.get_song(nd_id)
+            new_bitrate = int((updated or {}).get("bitrate") or 0)
+            if bitrate and (not new_bitrate or new_bitrate == bitrate):
+                break
+            if updated and new_bitrate and new_bitrate != int(song.get("bitrate") or 0):
+                bitrate = new_bitrate
+                break
+            time.sleep(0.6)
+
+    _refresh_index_async()
+    if video_id:
+        with session_scope() as session:
+            repo.upsert_navidrome_link(
+                session,
+                video_id,
+                nd_id,
+                title=song.get("title") or "",
+                artist=song.get("artist") or "",
+                path=str(dest),
+            )
+    return {
+        "navidromeId": nd_id,
+        "path": str(dest),
+        "bitrate": bitrate,
+        "title": (updated or song).get("title") or song.get("title") or "",
+        "artist": (updated or song).get("artist") or song.get("artist") or "",
+    }
+
+
+def replace_track(
+    navidrome_id: str,
+    video_id: str,
+    format_id: str | None = None,
+    *,
+    wanted_bitrate: int = 0,
+    force_mp3_320: bool = False,
+) -> dict:
+    nd_id = (navidrome_id or "").strip()
+    video_id = (video_id or "").strip()
+    if not nd_id:
+        raise RuntimeError("Navidrome-Id fehlt")
+    if not video_id or video_id.startswith("nd:"):
+        raise RuntimeError("YouTube-Id fehlt")
+
+    tmp_dir = settings.audio_cache_dir / "quality"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Lade YouTube {} für Qualitäts-Tausch von {}", video_id, nd_id)
     try:
         with yt_dlp.YoutubeDL(_ydl_best_options(str(tmp_dir / f"{video_id}.%(ext)s"), format_id)) as ydl:
             ydl.extract_info(f"https://music.youtube.com/watch?v={video_id}", download=True)
@@ -662,65 +745,18 @@ def replace_track(
     if produced is None:
         raise RuntimeError("yt-dlp hat keine Audiodatei erzeugt")
 
-    source_bitrate = _probe_file_bitrate(produced)
-    current_bitrate = int(song.get("bitrate") or 0)
-    if not _bitrate_is_upgrade(source_bitrate, current_bitrate, wanted_bitrate):
+    try:
+        return install_file(
+            nd_id,
+            produced,
+            wanted_bitrate=wanted_bitrate,
+            force_mp3_320=force_mp3_320,
+            video_id=video_id,
+            skip_upgrade_check=force_mp3_320,
+        )
+    finally:
         for leftover in tmp_dir.glob(f"{video_id}*"):
             leftover.unlink(missing_ok=True)
-        raise RuntimeError(_bitrate_reject_message(source_bitrate, current_bitrate, wanted_bitrate))
-
-    backup = tmp_dir / f"{nd_id}.bak{original.suffix}"
-    try:
-        shutil.copy2(original, backup)
-        _encode_into(produced, dest, song, work_dir=tmp_dir, source_bitrate=source_bitrate)
-        if cover_tmp.is_file():
-            try:
-                artwork.embed_image_file(dest, cover_tmp)
-            except Exception as exc:
-                logger.warning("Cover nach Qualitäts-Tausch nicht eingebettet: {}", exc)
-    except Exception:
-        if backup.is_file():
-            shutil.copy2(backup, original)
-        raise
-    if dest != original and dest.is_file() and original.is_file():
-        original.unlink(missing_ok=True)
-    backup.unlink(missing_ok=True)
-    for leftover in tmp_dir.glob(f"{video_id}*"):
-        leftover.unlink(missing_ok=True)
-    cover_tmp.unlink(missing_ok=True)
-
-    bitrate = _probe_file_bitrate(dest)
-    updated = None
-    with NavidromeClient() as client:
-        _wait_for_scan(client, timeout=6)
-        deadline = time.time() + 12
-        while time.time() < deadline:
-            updated = client.get_song(nd_id)
-            new_bitrate = int((updated or {}).get("bitrate") or 0)
-            if bitrate and (not new_bitrate or new_bitrate == bitrate):
-                break
-            if updated and new_bitrate and new_bitrate != int(song.get("bitrate") or 0):
-                bitrate = new_bitrate
-                break
-            time.sleep(0.6)
-
-    _refresh_index_async()
-    with session_scope() as session:
-        repo.upsert_navidrome_link(
-            session,
-            video_id,
-            nd_id,
-            title=song.get("title") or "",
-            artist=song.get("artist") or "",
-            path=str(dest),
-        )
-    return {
-        "navidromeId": nd_id,
-        "path": str(dest),
-        "bitrate": bitrate,
-        "title": (updated or song).get("title") or song.get("title") or "",
-        "artist": (updated or song).get("artist") or song.get("artist") or "",
-    }
 
 
 def _run_replace(
@@ -742,43 +778,50 @@ def _run_replace(
             update_job(job_id, status="running", message=text)
 
         wanted = int((candidate or {}).get("bitrate") or 0)
-        hub_error = ""
-        if source in {"musikat", "usenet"} and candidate:
+        catalog_error = ""
+        as_mp3_320 = source in {"musikat", "deezer", "usenet"} or wanted >= 280
+        from app.musikat import config as mk_config
+
+        if source in {"musikat", "deezer"} and candidate and mk_config.resolve_url():
             progress(
-                f"Lade die gewählte {wanted} kbit/s-Datei über den Hub …"
+                f"Lade über MusiKat als MP3 {wanted or 320} …"
                 if wanted
-                else "Lade die gewählte Datei über den Hub …"
+                else "Lade über MusiKat …"
             )
             try:
-                result = nd_quality.replace_via_mediasync(navidrome_id, candidate, progress=progress)
+                result = nd_quality.replace_via_musikat(navidrome_id, candidate, progress=progress)
                 got = int(result.get("bitrate") or 0)
-                if _bitrate_is_upgrade(got, 0, wanted) or (wanted and got + 24 >= wanted):
-                    with _jobs_lock:
-                        _jobs[job_id]["status"] = "done"
-                        _jobs[job_id]["navidromeId"] = result.get("navidromeId")
-                        _jobs[job_id]["bitrate"] = got
-                        _jobs[job_id]["message"] = "Fertig"
-                        _jobs[job_id]["title"] = result.get("title") or _jobs[job_id].get("title") or ""
-                    return
-                hub_error = f"Hub lieferte {got or 'keine'} kbit/s statt {wanted or 'der gewählten Qualität'}"
+                with _jobs_lock:
+                    _jobs[job_id]["status"] = "done"
+                    _jobs[job_id]["navidromeId"] = result.get("navidromeId")
+                    _jobs[job_id]["bitrate"] = got
+                    _jobs[job_id]["message"] = "Fertig"
+                    _jobs[job_id]["title"] = result.get("title") or _jobs[job_id].get("title") or ""
+                return
             except Exception as exc:
-                hub_error = str(exc)
-                logger.warning("Hub-Qualität {} nicht nutzbar: {}", source, exc)
-            progress("Hub-Download ungeeignet, prüfe YouTube …")
+                catalog_error = str(exc)
+                logger.warning("MusiKat-Download nicht nutzbar: {}", exc)
+            progress("MusiKat nicht nutzbar, lade selbst von YouTube …")
 
         progress("Suche direkte YouTube-Quelle …")
         youtube = nd_quality.resolve_direct_video_id(navidrome_id, video_id, candidate)
         if not youtube:
             raise RuntimeError(
-                hub_error
+                catalog_error
                 or "Keine YouTube-Quelle für den direkten Download gefunden."
             )
         progress("Lade selbst nach Navidrome …")
         try:
-            result = replace_track(navidrome_id, youtube, format_id, wanted_bitrate=wanted)
+            result = replace_track(
+                navidrome_id,
+                youtube,
+                format_id,
+                wanted_bitrate=wanted,
+                force_mp3_320=as_mp3_320,
+            )
         except Exception as exc:
-            if hub_error:
-                raise RuntimeError(f"{exc} Hub: {hub_error}") from exc
+            if catalog_error:
+                raise RuntimeError(f"{exc} MusiKat: {catalog_error}") from exc
             raise
         with _jobs_lock:
             _jobs[job_id]["status"] = "done"

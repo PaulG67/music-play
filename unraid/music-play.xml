@@ -136,6 +136,10 @@
           Description="Unterordner für Imports, z. B. YouTube → /mnt/user/music/YouTube/…. Punkt oder Schrägstrich (. oder /) = direkt in die Musik-Root /mnt/user/music (Interpret/Album/…)."
           Type="Variable" Display="advanced" Required="false" Mask="false">YouTube</Config>
 
+  <Config Name="MusiKat-URL" Target="MUSIKAT_URL" Default="" Mode=""
+          Description="Adresse der MusiKat-App, z. B. http://192.168.0.219:8000. Für Qualitäts-Downloads als MP3 320, ohne MediaSync-Hub."
+          Type="Variable" Display="always" Required="false" Mask="false"></Config>
+
   <Config Name="MediaSync-URL" Target="MEDIASYNC_URL" Default="" Mode=""
           Description="Adresse der MediaSync-App auf Unraid, z. B. http://192.168.0.188:8090. Nur nötig, wenn Downloads zusätzlich in MediaSync-Playlists landen sollen."
           Type="Variable" Display="always" Required="false" Mask="false"></Config>

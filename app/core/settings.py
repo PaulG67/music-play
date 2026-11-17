@@ -9,7 +9,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 APP_NAME = "Music Play"
-APP_VERSION = "1.10.25"
+APP_VERSION = "1.10.26"
 SUBSONIC_API_VERSION = "1.16.1"
 
 CONFIG_DIR = Path(os.getenv("CONFIG_DIR", "/config"))
@@ -116,6 +116,7 @@ class Settings(BaseModel):
     mediasync_url: str = os.getenv("MEDIASYNC_URL", "").rstrip("/")
     mediasync_user: str = _env("MEDIASYNC_USER", "")
     mediasync_password: str = _env("MEDIASYNC_PASSWORD", "")
+    musikat_url: str = os.getenv("MUSIKAT_URL", "").rstrip("/")
 
     metadata_ttl: int = int(os.getenv("METADATA_TTL", "3600"))
     stream_url_margin: int = int(os.getenv("STREAM_URL_MARGIN", "600"))

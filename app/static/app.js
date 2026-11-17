@@ -119,6 +119,7 @@
     status: null,
     navidrome: null,
     mediasync: null,
+    musikat: null,
     online: navigator.onLine,
     home: null,
     homeEditing: false,
@@ -2434,6 +2435,46 @@
     );
   }
 
+  function musikatSettings(status) {
+    const mk = status.musikat || {};
+    state.musikat = mk;
+    return configCard(
+      "MusiKat",
+      mk.configured
+        ? mk.reachable
+          ? "Music Play sucht und lädt 320-kbit/s-MP3 direkt bei MusiKat, ohne den MediaSync-Hub."
+          : "Gespeichert, aber MusiKat antwortet nicht. URL prüfen – im LAN z. B. http://192.168.0.219:8000."
+        : "URL deiner MusiKat-App. Ohne URL sucht Music Play den Titel im Deezer-Katalog und speichert selbst MP3 320 nach Navidrome.",
+      ICONS.disc,
+      [
+      element("div", { class: "settings-form" }, [
+        labeledInput("mk-url", "Server-URL", {
+          type: "url",
+          value: mk.url || "",
+          placeholder: "http://192.168.0.219:8000",
+          autocomplete: "off",
+        }),
+        element("button", {
+          class: "chip solid",
+          text: "Verbinden",
+          onclick: async () => {
+            try {
+              const data = await api("/api/musikat", {
+                method: "PUT",
+                body: { url: $("mk-url").value.trim() },
+              });
+              state.musikat = data;
+              toast(data.reachable ? "MusiKat verbunden" : "Gespeichert");
+              render(state.route, true);
+            } catch (error) {
+              toast(error.message);
+            }
+          },
+        }),
+      ]),
+    ]);
+  }
+
   function mediasyncSettings(status) {
     const ms = status.mediasync || {};
     state.mediasync = ms;
@@ -2776,12 +2817,14 @@
         ),
         connectionPill(Boolean(nd.configured && nd.reachable), nd.configured && nd.reachable ? "Navidrome" : "Navidrome aus"),
         connectionPill(Boolean(ms.configured && ms.reachable), ms.configured && ms.reachable ? "MediaSync" : "MediaSync aus"),
+        connectionPill(Boolean((status.musikat || {}).configured && (status.musikat || {}).reachable), (status.musikat || {}).configured && (status.musikat || {}).reachable ? "MusiKat" : "MusiKat aus"),
       ]),
       element("div", { class: "config-grid" }, [
         accountSettings(status),
         status.isAdmin ? loginGateSettings(status) : null,
         navidromeSettings(status),
         status.isAdmin ? usersAdminSettings(users.users) : null,
+        musikatSettings(status),
         mediasyncSettings(status),
         amperfySettings(status),
         configCard("System", "Speicher, Dienste und App-Version.", ICONS.info, [
@@ -3942,7 +3985,7 @@
       element("p", {
         class: "muted",
         text: ndId
-          ? "320 kbit/s kommt vom Hub (MusiKat/Usenet). YouTube allein liefert oft nur 128 kbit/s – dann wird die Datei nicht ersetzt."
+          ? "MusiKat sucht den Titel im Deezer-Katalog und speichert MP3 320. Das ist nicht dieselbe YouTube-Music-Datei in höherer Qualität – YouTube Music selbst bietet oft nur 128–256 kbit/s."
           : "Zum Ersetzen den Titel zuerst nach Navidrome legen.",
       }),
       ...options.map((option) => {

@@ -237,3 +237,6 @@ class MediaSyncClient:
 
     def song_check_job(self, job_id: str) -> dict:
         return self._get(f"/api/song-check/jobs/{job_id}").json()
+
+    def hub_config(self) -> dict:
+        return self._get("/api/config").json()
