@@ -110,25 +110,84 @@ def _write_ffmpeg_tags(source: Path, dest: Path, track: dict) -> None:
         shutil.copy2(source, dest)
 
 
-def _wait_for_scan(client: NavidromeClient, timeout: int = 90) -> None:
+def _wait_for_scan(client: NavidromeClient, timeout: float = 8) -> None:
+    """
+    Kick a Navidrome scan and wait briefly for it to finish.
+
+    Watcher-based libraries often never report scanning=true — bail out
+    quickly instead of burning ~90s. Callers should poll for the new
+    song with search, not wait for a full library scan.
+    """
+
     client.start_scan()
-    deadline = time.time() + timeout
+    deadline = time.time() + max(1.0, float(timeout))
     saw_scan = False
+    idle_rounds = 0
     while time.time() < deadline:
         status = client.scan_status()
         if status.get("scanning"):
             saw_scan = True
+            idle_rounds = 0
         elif saw_scan:
             return
-        time.sleep(1.5)
-    # Watcher-based libraries may never report scanning=true.
-    time.sleep(2)
+        else:
+            idle_rounds += 1
+            # Never saw an active scan after a few polls → watcher / already done.
+            if idle_rounds >= 3:
+                return
+        time.sleep(0.45)
 
 
-def _locate(track: dict) -> dict | None:
-    nd_match.refresh_index(force=True)
-    found = nd_match.find_in_index(track) or nd_match.find_live(track)
-    return found
+def _locate(track: dict, *, force_refresh: bool = False) -> dict | None:
+    if force_refresh:
+        nd_match.refresh_index(force=True)
+    return nd_match.find_in_index(track) or nd_match.find_live(track)
+
+
+def _refresh_index_async() -> None:
+    threading.Thread(
+        target=nd_match.refresh_index,
+        kwargs={"force": True},
+        daemon=True,
+        name="nd-index-after-import",
+    ).start()
+
+
+def _await_indexed(
+    track: dict,
+    client: NavidromeClient,
+    timeout: float = 40,
+) -> dict | None:
+    """
+    Trigger a scan, then poll live search until the track appears.
+
+    Avoids a forced full-library index dump on every import attempt.
+    """
+
+    found = _locate(track, force_refresh=False)
+    if found and found.get("id"):
+        return found
+
+    _wait_for_scan(client, timeout=6)
+    deadline = time.time() + max(5.0, float(timeout))
+    force_after = time.time() + 8
+    forced = False
+    while time.time() < deadline:
+        found = _locate(track, force_refresh=False)
+        if found and found.get("id"):
+            _refresh_index_async()
+            return found
+        if not forced and time.time() >= force_after:
+            forced = True
+            found = _locate(track, force_refresh=True)
+            if found and found.get("id"):
+                return found
+        time.sleep(0.55)
+
+    found = _locate(track, force_refresh=True)
+    if found and found.get("id"):
+        return found
+    return None
 
 
 def import_track(track: dict) -> dict:
@@ -155,9 +214,10 @@ def import_track(track: dict) -> dict:
 
     if dest.exists() and dest.stat().st_size > 1024:
         logger.info("Datei existiert bereits, überspringe Download: {}", dest)
-        with NavidromeClient() as client:
-            _wait_for_scan(client)
-            found = _locate(track)
+        found = _locate(track, force_refresh=False)
+        if not (found and found.get("id")):
+            with NavidromeClient() as client:
+                found = _await_indexed(track, client, timeout=25)
         if found and found.get("id"):
             with session_scope() as session:
                 repo.upsert_navidrome_link(
@@ -204,11 +264,7 @@ def import_track(track: dict) -> dict:
         leftover.unlink(missing_ok=True)
 
     with NavidromeClient() as client:
-        _wait_for_scan(client)
-        found = _locate(track)
-        if found is None:
-            time.sleep(3)
-            found = _locate(track)
+        found = _await_indexed(track, client, timeout=40)
 
     if not found or not found.get("id"):
         raise RuntimeError(
@@ -532,17 +588,21 @@ def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None
     cover_tmp.unlink(missing_ok=True)
 
     bitrate = _probe_file_bitrate(dest)
+    updated = None
     with NavidromeClient() as client:
-        _wait_for_scan(client)
-        updated = client.get_song(nd_id)
-        if updated and int(updated.get("bitrate") or 0) in (0, song.get("bitrate")):
-            time.sleep(3)
-            updated = client.get_song(nd_id) or updated
+        _wait_for_scan(client, timeout=6)
+        deadline = time.time() + 12
+        while time.time() < deadline:
+            updated = client.get_song(nd_id)
+            new_bitrate = int((updated or {}).get("bitrate") or 0)
+            if updated and new_bitrate and new_bitrate != int(song.get("bitrate") or 0):
+                break
+            time.sleep(0.6)
 
     if updated and int(updated.get("bitrate") or 0):
         bitrate = int(updated.get("bitrate") or bitrate)
 
-    nd_match.refresh_index(force=True)
+    _refresh_index_async()
     with session_scope() as session:
         repo.upsert_navidrome_link(
             session,
