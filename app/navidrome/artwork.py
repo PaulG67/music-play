@@ -21,24 +21,11 @@ from app.db.database import session_scope
 from app.navidrome import config
 from app.navidrome import ids as nd_ids
 from app.navidrome.client import NavidromeClient
+from app.navidrome.paths import AUDIO_SUFFIXES, try_resolve_library_rel_path
 from app.ytm import client as ytm
 from app.ytm import mapper
 
-_AUDIO = {
-    ".m4a",
-    ".mp4",
-    ".mp3",
-    ".flac",
-    ".ogg",
-    ".opus",
-    ".aac",
-    ".wav",
-    ".wma",
-    ".aiff",
-    ".aif",
-    ".ape",
-    ".alac",
-}
+_AUDIO = AUDIO_SUFFIXES
 _HEADERS = {"User-Agent": f"MusicPlay/{APP_VERSION} (https://github.com/PaulG67/music-play)"}
 _MB_HEADERS = {
     "User-Agent": f"MusicPlay/{APP_VERSION} ( https://github.com/PaulG67/music-play )",
@@ -155,7 +142,11 @@ def resolve_audio_path(track: dict) -> Path | None:
 
     root = _music_root()
     seen: set[str] = set()
+    relative_candidates: list[str] = []
     for path in candidates:
+        relative = _reported_to_relative(path)
+        if relative:
+            relative_candidates.append(relative)
         for option in _mapped_audio_options(path, root):
             try:
                 resolved = option.resolve()
@@ -165,6 +156,14 @@ def resolve_audio_path(track: dict) -> Path | None:
             if key in seen:
                 continue
             seen.add(key)
+            try:
+                relative_candidates.append(
+                    resolved.relative_to(root).as_posix()
+                )
+            except (ValueError, OSError):
+                option_rel = _reported_to_relative(option)
+                if option_rel:
+                    relative_candidates.append(option_rel)
             audio = resolved.is_file() and (
                 resolved.suffix.lower() in _AUDIO or not resolved.suffix
             )
@@ -172,6 +171,18 @@ def resolve_audio_path(track: dict) -> Path | None:
                 if not _inside_library(resolved):
                     logger.warning("Audiodatei außerhalb von {}: {}", root, resolved)
                 return resolved
+
+    # Tolerant resolve: case, Unicode, track prefix, fuzzy album/filename
+    seen_rel: set[str] = set()
+    for relative in relative_candidates:
+        key = relative.casefold()
+        if key in seen_rel:
+            continue
+        seen_rel.add(key)
+        found = try_resolve_library_rel_path(root, relative)
+        if found is not None and found.is_file():
+            return found
+
     return _guess_audio_path(track)
 
 
