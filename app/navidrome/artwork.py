@@ -206,6 +206,13 @@ def _guess_audio_path(track: dict) -> Path | None:
         if not folder.is_dir():
             continue
         files = [path for path in folder.iterdir() if path.is_file() and path.suffix.lower() in _AUDIO]
+        files.sort(
+            key=lambda path: (
+                bool(re.search(r"\(\d+\)$", path.stem)),
+                path.suffix.lower() in {".opus", ".webm", ".ogg"},
+                path.name.casefold(),
+            )
+        )
         if needle:
             match = next((path for path in files if needle in path.stem.casefold()), None)
             if match and _inside_library(match):
@@ -726,6 +733,21 @@ def embed_into_file(path: Path, jpeg: bytes) -> None:
         picture.data = jpeg
         audio.clear_pictures()
         audio.add_picture(picture)
+        audio.save()
+        return
+    if suffix in {".opus", ".ogg"}:
+        import base64
+
+        from mutagen.oggopus import OggOpus
+        from mutagen.oggvorbis import OggVorbis
+
+        audio = OggOpus(path) if suffix == ".opus" else OggVorbis(path)
+        picture = Picture()
+        picture.type = 3
+        picture.mime = "image/jpeg"
+        picture.desc = "Cover"
+        picture.data = jpeg
+        audio["metadata_block_picture"] = [base64.b64encode(picture.write()).decode("ascii")]
         audio.save()
         return
     raise RuntimeError(f"Cover-Einbettung für {suffix or 'diese Datei'} nicht unterstützt")

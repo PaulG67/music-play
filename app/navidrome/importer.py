@@ -358,11 +358,15 @@ _AUDIO_EXTS = {".m4a", ".mp4", ".mp3", ".webm", ".opus", ".ogg", ".flac", ".wav"
 
 def _ydl_best_options(output_template: str, format_id: str | None = None) -> dict:
     options = _ydl_options(output_template)
-    options["format"] = format_id or "bestaudio/best"
+    options["format"] = format_id or streams.FORMAT_SELECTOR
+    options["overwrites"] = True
     options["writethumbnail"] = False
     options["embedthumbnail"] = False
-    options["postprocessors"] = [{"key": "FFmpegMetadata", "add_metadata": True}]
-    options.pop("postprocessor_args", None)
+    options["postprocessors"] = [
+        {"key": "FFmpegExtractAudio", "preferredcodec": "m4a", "preferredquality": "256"},
+        {"key": "FFmpegMetadata", "add_metadata": True},
+    ]
+    options["postprocessor_args"] = {"ffmpeg": ["-movflags", "+faststart"]}
     return options
 
 
@@ -379,9 +383,39 @@ def _audio_encode_args(suffix: str) -> list[str]:
     return ["-c:a", "aac", "-b:a", "256k"]
 
 
-def _part_path(dest: Path) -> Path:
+_DUP_STEM = re.compile(r"\s*\(\d+\)$")
+_WEAK_AUDIO = {".opus", ".webm", ".ogg"}
+_KEEP_AUDIO = {".m4a", ".mp4", ".mp3", ".flac", ".aac"}
+
+
+def _part_path(dest: Path, folder: Path | None = None) -> Path:
     """Keep the real audio suffix so ffmpeg can pick a muxer (not `.m4a.part`)."""
-    return dest.with_name(f".{dest.stem}.part{dest.suffix}")
+    parent = folder or dest.parent
+    return parent / f".{dest.stem}.part{dest.suffix}"
+
+
+def _canonical_replace_path(dest: Path, song: dict | None = None) -> Path:
+    """Keep the original library file; skip Hub duplicates like `Titel (2).opus`."""
+    if dest is None:
+        return dest
+    parent = dest.parent
+    stem = _DUP_STEM.sub("", dest.stem).strip() or dest.stem
+    reported = Path(str((song or {}).get("path") or (song or {}).get("filePath") or "")).suffix.lower()
+    preferred = []
+    if reported:
+        preferred.append(reported)
+    preferred.extend([".m4a", ".mp3", ".flac", ".mp4", ".aac", dest.suffix.lower()])
+    seen: set[str] = set()
+    for suffix in preferred:
+        if not suffix or suffix in seen:
+            continue
+        seen.add(suffix)
+        candidate = parent / f"{stem}{suffix}"
+        if candidate.is_file():
+            return candidate
+    if dest.is_file() and dest.suffix.lower() not in _WEAK_AUDIO:
+        return dest
+    return dest
 
 
 def _container_args(suffix: str) -> list[str]:
@@ -473,9 +507,9 @@ def _probe_file_bitrate(path: Path) -> int:
         return 0
 
 
-def _encode_into(source: Path, dest: Path, track: dict) -> None:
+def _encode_into(source: Path, dest: Path, track: dict, *, work_dir: Path | None = None) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _part_path(dest)
+    tmp = _part_path(dest, work_dir)
     tmp.unlink(missing_ok=True)
     if shutil.which("ffmpeg") is None:
         if dest.suffix.lower() != source.suffix.lower():
@@ -527,7 +561,11 @@ def _encode_into(source: Path, dest: Path, track: dict) -> None:
     if not tmp.is_file() or tmp.stat().st_size < 1024:
         tmp.unlink(missing_ok=True)
         raise RuntimeError("ffmpeg hat keine gültige Audiodatei erzeugt")
-    tmp.replace(dest)
+    try:
+        tmp.replace(dest)
+    except OSError:
+        shutil.copy2(tmp, dest)
+        tmp.unlink(missing_ok=True)
 
 
 def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None) -> dict:
@@ -558,11 +596,15 @@ def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None
             "Audiodatei in der Navidrome-Quelle nicht gefunden. "
             f"Musikordner muss dieselbe Freigabe wie Navidrome sein ({config.music_dir()})."
         )
+    dest = _canonical_replace_path(dest, song)
+    original = dest
+    if dest.suffix.lower() in _WEAK_AUDIO:
+        dest = dest.with_suffix(".m4a")
 
     tmp_dir = settings.audio_cache_dir / "quality"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     cover_tmp = tmp_dir / f"{nd_id}.cover.jpg"
-    _extract_cover(dest, cover_tmp)
+    _extract_cover(original, cover_tmp)
 
     logger.info("Ersetze Navidrome-Datei {} durch YouTube {}", dest, video_id)
     try:
@@ -571,17 +613,18 @@ def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None
     except Exception as exc:
         raise RuntimeError(f"Download fehlgeschlagen: {exc}") from exc
 
-    produced = next(
-        (path for path in tmp_dir.glob(f"{video_id}*") if path.suffix.lower() in _AUDIO_EXTS),
-        None,
-    )
+    audio_hits = [
+        path for path in tmp_dir.glob(f"{video_id}*") if path.suffix.lower() in _AUDIO_EXTS
+    ]
+    audio_hits.sort(key=lambda path: (path.suffix.lower() != ".m4a", " (2)" in path.stem, path.name))
+    produced = audio_hits[0] if audio_hits else None
     if produced is None:
         raise RuntimeError("yt-dlp hat keine Audiodatei erzeugt")
 
-    backup = dest.with_name(dest.name + ".bak")
+    backup = tmp_dir / f"{nd_id}.bak{original.suffix}"
     try:
-        shutil.copy2(dest, backup)
-        _encode_into(produced, dest, song)
+        shutil.copy2(original, backup)
+        _encode_into(produced, dest, song, work_dir=tmp_dir)
         if cover_tmp.is_file():
             try:
                 artwork.embed_image_file(dest, cover_tmp)
@@ -589,8 +632,10 @@ def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None
                 logger.warning("Cover nach Qualitäts-Tausch nicht eingebettet: {}", exc)
     except Exception:
         if backup.is_file():
-            shutil.move(str(backup), str(dest))
+            shutil.copy2(backup, original)
         raise
+    if dest != original and dest.is_file() and original.is_file():
+        original.unlink(missing_ok=True)
     backup.unlink(missing_ok=True)
     for leftover in tmp_dir.glob(f"{video_id}*"):
         leftover.unlink(missing_ok=True)
@@ -604,12 +649,12 @@ def replace_track(navidrome_id: str, video_id: str, format_id: str | None = None
         while time.time() < deadline:
             updated = client.get_song(nd_id)
             new_bitrate = int((updated or {}).get("bitrate") or 0)
+            if bitrate and (not new_bitrate or new_bitrate == bitrate):
+                break
             if updated and new_bitrate and new_bitrate != int(song.get("bitrate") or 0):
+                bitrate = new_bitrate
                 break
             time.sleep(0.6)
-
-    if updated and int(updated.get("bitrate") or 0):
-        bitrate = int(updated.get("bitrate") or bitrate)
 
     _refresh_index_async()
     with session_scope() as session:

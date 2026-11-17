@@ -225,16 +225,27 @@ def _filename_match_score(actual: str, wanted: str) -> int:
     actual_stem = Path(actual).stem
     wanted_stem = Path(wanted).stem
     if actual_stem.casefold() == wanted_stem.casefold():
-        return 98
+        score = 98
+    else:
+        a = _normalize_track_key(actual_stem)
+        w = _normalize_track_key(wanted_stem)
+        if a == w:
+            score = 96
+        elif a and w and (a in w or w in a):
+            score = 90
+        else:
+            score = _name_similarity(actual_stem, wanted_stem)
 
-    a = _normalize_track_key(actual_stem)
-    w = _normalize_track_key(wanted_stem)
-    if a == w:
-        return 96
-    if a and w and (a in w or w in a):
-        return 90
-
-    return _name_similarity(actual_stem, wanted_stem)
+    if re.search(r"\(\d+\)$", actual_stem) and not re.search(r"\(\d+\)$", wanted_stem):
+        score -= 20
+    actual_ext = Path(actual).suffix.casefold()
+    wanted_ext = Path(wanted).suffix.casefold()
+    if wanted_ext and actual_ext != wanted_ext:
+        if actual_ext in {".opus", ".webm", ".ogg"}:
+            score -= 12
+        else:
+            score -= 4
+    return max(0, score)
 
 
 def _normalize_track_key(value: str) -> str:
