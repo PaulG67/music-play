@@ -2240,6 +2240,7 @@
     logout: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17v-3h4v-4h-4V7l-5 5 5 5zm9-14H5a2 2 0 0 0-2 2v4h2V5h14v14H5v-4H3v4a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z"/></svg>',
     sleep: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a8 8 0 1 0 8 8h-2a6 6 0 1 1-6-6V4zm7.6.7-1.4 1.4 1.8 1.8 1.4-1.4L19.6 4.7zM12 2h2v3h-2V2z"/></svg>',
     users: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0-4-4 4 4 0 0 0 4 4zm-7 9v-1.2A5.8 5.8 0 0 1 10.8 14h2.4A5.8 5.8 0 0 1 19 19.8V21H5zm14.5-9a3.5 3.5 0 1 0-3.2-4.9 5.9 5.9 0 0 1 0 3.8A3.5 3.5 0 0 0 19.5 12zM16 21v-1.2a7.6 7.6 0 0 0-1.1-3.8H18a4.6 4.6 0 0 1 4 2.4V21h-6z"/></svg>',
+    key: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.7 11.3A4.5 4.5 0 1 0 11 12.7l6.6 6.6 1.4-1.4-1.3-1.3 1.8-1.8-1.4-1.4-1.8 1.8-1.2-1.2 1.5-1.5-1.4-1.4-1.5 1.5-1zM7.5 10A2.5 2.5 0 1 1 10 7.5 2.5 2.5 0 0 1 7.5 10z"/></svg>',
   };
 
   function moreRow(title, meta, icon, onclick, extraClass) {
@@ -2617,7 +2618,7 @@
     const loginOn = status.loginRequired !== false && !status.needsSetup;
     return configCard(
       "App-Anmeldung",
-      "Wenn der Reverse-Proxy (Authelia, Authentik, NPM) schon schützt, kannst du das Music-Play-Login ausmachen. Dann kommt jeder durch, der den Proxy passiert – als Admin-Konto.",
+      "Wenn der Reverse-Proxy (Authelia, Authentik, NPM) schon schützt, kannst du das Music-Play-Login ausmachen. Dann kommt jeder durch, der den Proxy passiert – als Admin-Konto. Für Pocket ID / OIDC siehe die Karte darunter.",
       ICONS.lock,
       [
         element("label", { class: "switch" }, [
@@ -2652,9 +2653,163 @@
         element("p", {
           class: "muted",
           text: loginOn
-            ? "Aktuell: Login in Music Play. Benutzername und Passwort wie unter Zugang."
+            ? "Aktuell: Login in Music Play (Passwort und/oder OIDC je nach Modus)."
             : "Aktuell: kein App-Login. Zugriff nur über den Proxy.",
         }),
+      ]
+    );
+  }
+
+  function oidcSettings(status) {
+    const oidc = status.oidc || {};
+    const mode = oidc.authMode || "password";
+    const modeOptions = [
+      { value: "password", label: "Nur Passwort" },
+      { value: "oidc", label: "Nur OIDC" },
+      { value: "both", label: "Beides (Passwort + OIDC)" },
+      { value: "internal_both", label: "Intern beides, extern nur OIDC" },
+    ];
+    return configCard(
+      "OIDC / Pocket ID",
+      "OpenID Connect für die Web-Anmeldung (z. B. Pocket ID). Redirect-URI in Pocket ID eintragen. Subsonic/Amperfy bleibt beim Passwort.",
+      ICONS.key,
+      [
+        element("label", { class: "switch" }, [
+          element("input", {
+            type: "checkbox",
+            id: "oidc-enabled",
+            checked: oidc.enabled ? "checked" : null,
+          }),
+          element("span", { text: "OIDC aktiv" }),
+        ]),
+        element("label", { text: "Anzeigename auf dem Login" }),
+        element("input", {
+          id: "oidc-name",
+          type: "text",
+          value: oidc.displayName || "Pocket ID",
+          placeholder: "Pocket ID",
+        }),
+        element("label", { text: "Issuer-URL" }),
+        element("input", {
+          id: "oidc-issuer",
+          type: "url",
+          value: oidc.issuer || "",
+          placeholder: "https://id.example.com",
+          autocomplete: "off",
+        }),
+        element("label", { text: "Client ID" }),
+        element("input", {
+          id: "oidc-client-id",
+          type: "text",
+          value: oidc.clientId || "",
+          autocomplete: "off",
+        }),
+        element("label", { text: "Client Secret" }),
+        element("input", {
+          id: "oidc-client-secret",
+          type: "password",
+          value: "",
+          placeholder: oidc.clientSecretSet ? "•••••••• (gesetzt)" : "Secret",
+          autocomplete: "new-password",
+        }),
+        element("label", { text: "Redirect URI (optional)" }),
+        element("input", {
+          id: "oidc-redirect",
+          type: "url",
+          value: oidc.redirectUri || "",
+          placeholder: oidc.redirectUriSuggested || "https://music.example.com/auth/oidc/callback",
+          autocomplete: "off",
+        }),
+        element("p", {
+          class: "muted",
+          text: `Empfohlen: ${(oidc.redirectUriSuggested || oidc.redirectUri || "/auth/oidc/callback").toString()}`,
+        }),
+        element("label", { text: "Login-Modus" }),
+        element(
+          "select",
+          { id: "oidc-mode" },
+          modeOptions.map((option) =>
+            element("option", {
+              value: option.value,
+              selected: mode === option.value ? "selected" : null,
+              text: option.label,
+            })
+          )
+        ),
+        element("label", { text: "Interne Netze (CIDR, kommagetrennt)" }),
+        element("input", {
+          id: "oidc-internal",
+          type: "text",
+          value: oidc.internalNetworks || "",
+          placeholder: "10.0.0.0/8,192.168.0.0/16",
+          autocomplete: "off",
+        }),
+        element("p", {
+          class: "muted",
+          text: "Für „Intern beides“: aus dem LAN Passwort + OIDC, von extern nur OIDC. X-Forwarded-For vom Proxy wird ausgewertet.",
+        }),
+        element("label", { class: "switch" }, [
+          element("input", {
+            type: "checkbox",
+            id: "oidc-auto-create",
+            checked: oidc.autoCreateUsers !== false ? "checked" : null,
+          }),
+          element("span", { text: "Benutzer beim ersten OIDC-Login automatisch anlegen" }),
+        ]),
+        element("div", { class: "row gap" }, [
+          element("button", {
+            class: "chip",
+            text: "Speichern",
+            onclick: async () => {
+              try {
+                const body = {
+                  enabled: $("oidc-enabled").checked,
+                  display_name: $("oidc-name").value.trim(),
+                  issuer: $("oidc-issuer").value.trim(),
+                  client_id: $("oidc-client-id").value.trim(),
+                  redirect_uri: $("oidc-redirect").value.trim(),
+                  auth_mode: $("oidc-mode").value,
+                  internal_networks: $("oidc-internal").value.trim(),
+                  auto_create_users: $("oidc-auto-create").checked,
+                };
+                const secret = $("oidc-client-secret").value;
+                if (secret) body.client_secret = secret;
+                await api("/api/oidc", { method: "PUT", body });
+                toast("OIDC gespeichert");
+                render(state.route, true);
+              } catch (error) {
+                toast(error.message);
+              }
+            },
+          }),
+          element("button", {
+            class: "chip",
+            text: "Discovery testen",
+            onclick: async () => {
+              try {
+                await api("/api/oidc", {
+                  method: "PUT",
+                  body: {
+                    enabled: $("oidc-enabled").checked,
+                    display_name: $("oidc-name").value.trim(),
+                    issuer: $("oidc-issuer").value.trim(),
+                    client_id: $("oidc-client-id").value.trim(),
+                    redirect_uri: $("oidc-redirect").value.trim(),
+                    auth_mode: $("oidc-mode").value,
+                    internal_networks: $("oidc-internal").value.trim(),
+                    auto_create_users: $("oidc-auto-create").checked,
+                    ...( $("oidc-client-secret").value ? { client_secret: $("oidc-client-secret").value } : {} ),
+                  },
+                });
+                const result = await api("/api/oidc/test", { method: "POST" });
+                if (!result.ok) throw new Error(result.error || "Discovery fehlgeschlagen");
+                toast("OIDC Discovery ok");
+              } catch (error) {
+                toast(error.message);
+              }
+            },
+          }),
+        ]),
       ]
     );
   }
@@ -2822,6 +2977,7 @@
       element("div", { class: "config-grid" }, [
         accountSettings(status),
         status.isAdmin ? loginGateSettings(status) : null,
+        status.isAdmin ? oidcSettings(status) : null,
         navidromeSettings(status),
         status.isAdmin ? usersAdminSettings(users.users) : null,
         musikatSettings(status),
@@ -4741,7 +4897,37 @@
     location.replace("/?loggedout=1");
   }
 
-  function showAuthScreen(mode, message) {
+  function applyLoginMethods(methods, mode) {
+    const setup = mode === "setup";
+    const passwordOn = setup || methods?.passwordLogin !== false;
+    const oidcOn = !setup && !!methods?.oidcLogin;
+    const passwordBox = $("login-password-fields");
+    const oidcBox = $("login-oidc-box");
+    const oidcButton = $("login-oidc-button");
+    const oidcDivider = $("login-oidc-divider");
+    if (passwordBox) passwordBox.hidden = !passwordOn;
+    if (oidcBox) oidcBox.hidden = !oidcOn;
+    if (oidcDivider) oidcDivider.hidden = !(passwordOn && oidcOn);
+    if (oidcButton) {
+      const label = methods?.oidcLabel || "OIDC";
+      oidcButton.textContent = `Mit ${label} anmelden`;
+      oidcButton.href = methods?.oidcStartUrl || "/auth/oidc/start";
+    }
+    if ($("login-lead") && !setup) {
+      if (passwordOn && oidcOn) {
+        $("login-lead").textContent = methods?.internalAccess
+          ? "Internes Netz: Passwort oder OIDC. Amperfy/Subsonic weiterhin mit dem lokalen Passwort."
+          : "Anmelden mit Passwort oder OIDC. Amperfy/Subsonic weiterhin mit dem lokalen Passwort.";
+      } else if (oidcOn) {
+        $("login-lead").textContent = `Anmelden über ${methods?.oidcLabel || "OIDC"}. Passwort-Login ist für diese Adresse aus.`;
+      } else {
+        $("login-lead").textContent =
+          "Melde dich mit deinem Music-Play-Konto an – nicht mit Unraid, Navidrome oder dem Reverse-Proxy.";
+      }
+    }
+  }
+
+  function showAuthScreen(mode, message, methods) {
     const setup = mode === "setup";
     const overlay = $("login");
     const form = $("login-form");
@@ -4752,13 +4938,15 @@
     $("login-lead").textContent = setup
       ? "Lege den ersten Administrator an (mindestens 8 Zeichen). Danach kannst du unter Konfig weitere Benutzer hinzufügen."
       : "Melde dich mit deinem Music-Play-Konto an – nicht mit Unraid, Navidrome oder dem Reverse-Proxy.";
-    $("login-pass").autocomplete = setup ? "new-password" : "current-password";
-    $("login-submit").textContent = setup ? "Zugang speichern" : "Anmelden";
+    if ($("login-pass")) $("login-pass").autocomplete = setup ? "new-password" : "current-password";
+    if ($("login-submit")) $("login-submit").textContent = setup ? "Zugang speichern" : "Anmelden";
     if (pass2 && form) {
       if (setup) {
         pass2.hidden = false;
         pass2.disabled = false;
-        form.insertBefore(pass2, $("login-error"));
+        const passwordBox = $("login-password-fields");
+        if (passwordBox) passwordBox.insertBefore(pass2, $("login-submit"));
+        else form.insertBefore(pass2, $("login-error"));
       } else {
         pass2.hidden = true;
         pass2.disabled = true;
@@ -4766,6 +4954,7 @@
         overlay.appendChild(pass2);
       }
     }
+    applyLoginMethods(methods || { passwordLogin: true, oidcLogin: false }, mode);
     if (message) {
       $("login-error").hidden = false;
       $("login-error").textContent = message;
@@ -4828,9 +5017,15 @@
     if (!session.authenticated) {
       const hint = await api("/auth/hint").catch(() => api("/api/login-hint")).catch(() => ({ username: "musicplay" }));
       if ($("login-user") && !$("login-user").value) $("login-user").value = hint.username || "";
+      const oidcFailed = params.get("login") === "oidc";
       showAuthScreen(
-        session.needsSetup || !session.passwordRequired ? "setup" : "login",
-        failed ? "Benutzername oder Passwort falsch." : undefined
+        session.needsSetup || (!session.passwordRequired && !hint.oidcLogin) ? "setup" : "login",
+        failed
+          ? "Benutzername oder Passwort falsch."
+          : oidcFailed
+            ? "OIDC-Anmeldung fehlgeschlagen. Erneut versuchen oder Passwort nutzen (falls freigeschaltet)."
+            : undefined,
+        hint
       );
       return;
     }

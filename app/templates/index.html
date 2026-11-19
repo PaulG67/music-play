@@ -22,10 +22,16 @@
     <img src="/static/icons/icon.svg" alt="">
     <h1>Music Play</h1>
     <p id="login-lead">Melde dich mit deinem Music-Play-Konto an – nicht mit Unraid, Navidrome oder dem Proxy.</p>
-    <input id="login-user" type="text" name="mp_username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Benutzername">
-    <input id="login-pass" type="password" name="mp_password" autocomplete="current-password" placeholder="Passwort" enterkeyhint="go">
+    <div id="login-password-fields">
+      <input id="login-user" type="text" name="mp_username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Benutzername">
+      <input id="login-pass" type="password" name="mp_password" autocomplete="current-password" placeholder="Passwort" enterkeyhint="go">
+      <button type="submit" id="login-submit">Anmelden</button>
+    </div>
     <p id="login-error" class="login-error" hidden></p>
-    <button type="submit" id="login-submit">Anmelden</button>
+    <div id="login-oidc-box" class="login-oidc" hidden>
+      <p id="login-oidc-divider" class="login-oidc-divider" hidden>oder</p>
+      <a id="login-oidc-button" class="login-oidc-button" href="/auth/oidc/start">Mit OIDC anmelden</a>
+    </div>
   </form>
   <input id="login-pass2" type="password" autocomplete="new-password" placeholder="Passwort wiederholen" hidden disabled>
 </section>
