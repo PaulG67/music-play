@@ -1,4 +1,4 @@
-# Publish prebuilt image so Unraid "Force update" can pull
+# Publish prebuilt image so Unraid "Force update" / "Apply update" can pull
 
 name: Build and publish GHCR image
 
@@ -17,6 +17,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Read app version
+        id: appver
+        run: |
+          ver="$(python3 -c "import pathlib,re; t=pathlib.Path('app/core/settings.py').read_text(); print(re.search(r'APP_VERSION\\s*=\\s*\"([^\"]+)\"', t).group(1))")"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "App version: $ver"
+
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
 
@@ -34,6 +41,7 @@ jobs:
           images: ghcr.io/paulg67/music-play
           tags: |
             type=raw,value=latest
+            type=raw,value=${{ steps.appver.outputs.version }}
             type=sha,prefix=
 
       - name: Build and push
@@ -48,3 +56,4 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             BUILD_REVISION=${{ github.sha }}
+            APP_VERSION=${{ steps.appver.outputs.version }}

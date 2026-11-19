@@ -42,6 +42,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Every main push must change a layer so Unraid "Apply update" sees a new digest.
+ARG BUILD_REVISION=dev
+ARG APP_VERSION=dev
+RUN printf '%s\n' "$BUILD_REVISION" > /app/BUILD_REVISION \
+    && printf '%s\n' "$APP_VERSION" > /app/APP_VERSION
+
+ENV BUILD_REVISION=${BUILD_REVISION} \
+    APP_VERSION_LABEL=${APP_VERSION}
+
 RUN python -m app.core.icons
 
 VOLUME ["/config", "/cache", "/logs", "/music"]
