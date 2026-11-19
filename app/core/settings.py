@@ -9,7 +9,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 APP_NAME = "Music Play"
-APP_VERSION = "1.10.29"
+APP_VERSION = "1.10.30"
 SUBSONIC_API_VERSION = "1.16.1"
 
 CONFIG_DIR = Path(os.getenv("CONFIG_DIR", "/config"))
@@ -117,6 +117,20 @@ class Settings(BaseModel):
     mediasync_user: str = _env("MEDIASYNC_USER", "")
     mediasync_password: str = _env("MEDIASYNC_PASSWORD", "")
     musikat_url: str = os.getenv("MUSIKAT_URL", "").rstrip("/")
+
+    # OpenID Connect (Pocket ID, Authentik, Authelia, …)
+    oidc_issuer: str = os.getenv("OIDC_ISSUER", "").rstrip("/")
+    oidc_client_id: str = _env("OIDC_CLIENT_ID", "")
+    oidc_client_secret: str = _env("OIDC_CLIENT_SECRET", "")
+    oidc_redirect_uri: str = os.getenv("OIDC_REDIRECT_URI", "").rstrip("/")
+    oidc_display_name: str = _env("OIDC_DISPLAY_NAME", "OIDC")
+    oidc_auth_mode: str = os.getenv("OIDC_AUTH_MODE", "password")
+    oidc_internal_networks: str = os.getenv(
+        "OIDC_INTERNAL_NETWORKS",
+        "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,::1/128",
+    )
+    oidc_scopes: str = os.getenv("OIDC_SCOPES", "openid profile email")
+    oidc_username_claim: str = os.getenv("OIDC_USERNAME_CLAIM", "preferred_username")
 
     metadata_ttl: int = int(os.getenv("METADATA_TTL", "3600"))
     stream_url_margin: int = int(os.getenv("STREAM_URL_MARGIN", "600"))

@@ -1202,6 +1202,30 @@ input[type="range"]::-moz-range-thumb {
   font-weight: 700;
 }
 .login-error { color: #ff6b6b; }
+.login-oidc {
+  margin-top: 14px;
+}
+.login-oidc[hidden] { display: none !important; }
+.login-oidc-divider {
+  margin: 4px 0 14px !important;
+  font-size: 12px !important;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.login-oidc-button {
+  display: block;
+  width: 100%;
+  padding: 13px;
+  border-radius: 12px;
+  background: #1f1f1f;
+  border: 1px solid #3a3a3a;
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+  box-sizing: border-box;
+}
+.login-oidc-button:active { background: #2a2a2a; }
+#login-password-fields[hidden] { display: none !important; }
 
 .settings-form {
   display: flex;

@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import threading
 
 from app.core import secret_box
@@ -65,6 +66,8 @@ def _normalize_user(raw: dict, *, admin: bool = False) -> dict:
         "password": password,
         "password_hash": hashed,
         "role": role,
+        "oidc_sub": clean_secret(str(raw.get("oidc_sub") or "")),
+        "email": clean_secret(str(raw.get("email") or "")),
         "navidrome": _navidrome_blob(raw.get("navidrome")),
     }
 
@@ -75,6 +78,8 @@ def _dump_user(user: dict) -> dict:
         "password": secret_box.seal(user.get("password") or ""),
         "password_hash": user.get("password_hash") or "",
         "role": user.get("role") or "user",
+        "oidc_sub": user.get("oidc_sub") or "",
+        "email": user.get("email") or "",
         "navidrome": _seal_navidrome(user.get("navidrome")),
     }
 
@@ -321,6 +326,81 @@ def create_user(username: str, password: str, *, role: str = "user") -> dict:
         if _find(users, name):
             raise ValueError("Benutzername ist vergeben")
         user = _normalize_user({"username": name, "password": cleaned, "role": role, "navidrome": {}})
+        users.append(user)
+        _write_unlocked(users)
+        _cache = [dict(item) for item in users]
+        return dict(user)
+
+
+def find_by_oidc_sub(oidc_sub: str) -> dict | None:
+    needle = clean_secret(oidc_sub)
+    if not needle:
+        return None
+    for user in load_users():
+        if clean_secret(str(user.get("oidc_sub") or "")) == needle:
+            return dict(user)
+    return None
+
+
+def ensure_oidc_user(
+    username: str,
+    *,
+    oidc_sub: str,
+    email: str = "",
+    auto_create: bool = True,
+) -> dict:
+    """Map an OIDC identity onto a local Music Play user."""
+
+    global _cache
+    name = clean_secret(username)
+    subject = clean_secret(oidc_sub) or name
+    mail = clean_secret(email)
+    if not name:
+        raise ValueError("OIDC ohne Benutzernamen")
+
+    existing = find_by_oidc_sub(subject) or get_user(name)
+    if existing:
+        with _lock:
+            users = _read_unlocked()
+            current = _find(users, existing["username"])
+            if current is None:
+                raise KeyError("Benutzer nicht gefunden")
+            current["oidc_sub"] = subject
+            if mail:
+                current["email"] = mail
+            _write_unlocked(users)
+            _cache = [dict(item) for item in users]
+            return dict(current)
+
+    if not auto_create:
+        raise ValueError(
+            f"Kein lokales Konto für „{name}“. Unter Konfig → Benutzerverwaltung anlegen "
+            "oder „Benutzer automatisch anlegen“ aktivieren."
+        )
+
+    password = secrets.token_urlsafe(24)
+    with _lock:
+        users = _read_unlocked()
+        if _find(users, name):
+            # Race / case collision: attach OIDC to the existing name.
+            current = _find(users, name)
+            assert current is not None
+            current["oidc_sub"] = subject
+            if mail:
+                current["email"] = mail
+            _write_unlocked(users)
+            _cache = [dict(item) for item in users]
+            return dict(current)
+        user = _normalize_user(
+            {
+                "username": name,
+                "password": password,
+                "role": "user",
+                "oidc_sub": subject,
+                "email": mail,
+                "navidrome": {},
+            }
+        )
         users.append(user)
         _write_unlocked(users)
         _cache = [dict(item) for item in users]

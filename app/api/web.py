@@ -26,6 +26,8 @@ from app.navidrome import bridge as navidrome
 from app.navidrome import config as navidrome_config
 from app.navidrome import ids as nd_ids
 from app.navidrome.client import NavidromeError
+from app.oidc import config as oidc_config
+from app.oidc import flow as oidc_flow
 from app.subsonic import media
 from app.ytm import ids
 from app.ytm import client as ytm
@@ -153,15 +155,17 @@ def _decorate(items: list[dict], kind: str | None = None) -> list[dict]:
 
 
 @router.get("/login-hint")
-async def login_hint():
+async def login_hint(request: Request):
     setup = auth_store.needs_setup()
     required = auth_store.login_required() and not setup
+    methods = oidc_flow.login_methods(request)
     return {
         "username": "" if required else (auth_store.username() or "musicplay"),
         "passwordRequired": required,
         "needsSetup": setup,
         "loginRequired": auth_store.login_required() and not setup,
         "version": APP_VERSION,
+        **methods,
     }
 
 
@@ -218,6 +222,11 @@ async def login(request: Request):
         if wants_json:
             raise HTTPException(status_code=401, detail=detail)
         return RedirectResponse("/?login=fail", status_code=303)
+    if not oidc_flow.password_login_allowed(request):
+        detail = "Passwort-Login ist für diese Adresse nicht freigeschaltet. Bitte OIDC nutzen."
+        if wants_json:
+            raise HTTPException(status_code=403, detail=detail)
+        return RedirectResponse("/?login=oidc", status_code=303)
     record = auth_store.get_user(username)
     if record is None or not web_session.check_password(username, password):
         _note_login_failure(request)
@@ -364,6 +373,32 @@ async def set_login_required(request: Request, payload: dict = Body(...)):
         "passwordRequired": login_on,
         "needsSetup": auth_store.needs_setup(),
     }
+
+
+@router.get("/oidc")
+async def oidc_status(request: Request):
+    _require_admin(request)
+    view = oidc_config.public_view()
+    return {**view, "redirectUriSuggested": oidc_flow.redirect_uri_for(request)}
+
+
+@router.put("/oidc")
+async def save_oidc(request: Request, payload: dict = Body(...)):
+    _require_admin(request)
+    saved = oidc_config.save(payload)
+    logger.info(
+        "OIDC gespeichert (enabled={}, mode={})",
+        saved.get("enabled"),
+        saved.get("auth_mode"),
+    )
+    view = oidc_config.public_view()
+    return {**view, "ok": True, "redirectUriSuggested": oidc_flow.redirect_uri_for(request)}
+
+
+@router.post("/oidc/test")
+async def test_oidc(request: Request):
+    _require_admin(request)
+    return oidc_flow.test_connection()
 
 
 # --------------------------------------------------------------------------
@@ -950,6 +985,20 @@ async def status(request: Request):
         "navidrome": navidrome.status(),
         "mediasync": mediasync.status(),
         "musikat": musikat_status(),
+        "oidc": (
+            {
+                **oidc_config.public_view(),
+                "redirectUriSuggested": oidc_flow.redirect_uri_for(request),
+            }
+            if auth_store.is_admin(user)
+            else {
+                "configured": oidc_config.configured(),
+                "enabled": bool(oidc_config.load().get("enabled")),
+                "displayName": oidc_config.load().get("display_name") or "OIDC",
+                "authMode": oidc_config.load().get("auth_mode") or "password",
+            }
+        ),
+        "authMethods": oidc_flow.login_methods(request),
     }
 
 
@@ -1387,8 +1436,8 @@ async def alias_home(request: Request):
 
 
 @alias_router.get("/auth/hint")
-async def alias_hint():
-    return await login_hint()
+async def alias_hint(request: Request):
+    return await login_hint(request)
 
 
 @alias_router.post("/auth/login")
@@ -1399,3 +1448,80 @@ async def alias_login(request: Request):
 @alias_router.post("/auth/logout")
 async def alias_logout(response: Response):
     return await logout(response)
+
+
+def _apply_oidc_state_cookie(response: Response, token: str, request: Request) -> None:
+    secure = web_session.request_is_https(request)
+    response.set_cookie(
+        oidc_flow.STATE_COOKIE,
+        token,
+        max_age=oidc_flow.STATE_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        path="/",
+        secure=secure,
+    )
+
+
+def _clear_oidc_state_cookie(response: Response) -> None:
+    for secure in (False, True):
+        response.delete_cookie(
+            oidc_flow.STATE_COOKIE,
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=secure,
+        )
+
+
+@alias_router.get("/auth/oidc/start")
+async def oidc_start(request: Request):
+    if auth_store.needs_setup():
+        return RedirectResponse("/?login=setup", status_code=303)
+    if not auth_store.login_required():
+        return RedirectResponse("/", status_code=303)
+    try:
+        url, state_token = oidc_flow.build_authorize_url(request)
+    except RuntimeError as exc:
+        logger.warning("OIDC-Start abgelehnt: {}", exc)
+        return RedirectResponse("/?login=oidc", status_code=303)
+    response = RedirectResponse(url, status_code=303)
+    _apply_oidc_state_cookie(response, state_token, request)
+    return response
+
+
+@alias_router.get("/auth/oidc/callback")
+async def oidc_callback(request: Request):
+    params = request.query_params
+    error = params.get("error")
+    if error:
+        detail = params.get("error_description") or error
+        logger.warning("OIDC-Callback Fehler: {}", detail)
+        response = RedirectResponse("/?login=oidc", status_code=303)
+        _clear_oidc_state_cookie(response)
+        return response
+    code = params.get("code") or ""
+    state = params.get("state") or ""
+    if not code or not state:
+        response = RedirectResponse("/?login=oidc", status_code=303)
+        _clear_oidc_state_cookie(response)
+        return response
+    try:
+        result = oidc_flow.finish_login(
+            request,
+            code=code,
+            state=state,
+            state_cookie=request.cookies.get(oidc_flow.STATE_COOKIE),
+        )
+    except Exception as exc:
+        logger.warning("OIDC-Login fehlgeschlagen: {}", exc)
+        response = RedirectResponse("/?login=oidc", status_code=303)
+        _clear_oidc_state_cookie(response)
+        return response
+
+    token = web_session.issue(result["username"])
+    logger.info("OIDC-Login erfolgreich für {}", result["username"])
+    response = RedirectResponse("/?oidc=1", status_code=303)
+    _set_session_cookie(response, token, request)
+    _clear_oidc_state_cookie(response)
+    return response
