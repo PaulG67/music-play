@@ -1,4 +1,6 @@
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -11,6 +13,19 @@ from app.core import auth_store
 from app.core.icons import ensure_icons
 from app.core.logging import logger
 from app.core.settings import APP_NAME, APP_VERSION, settings
+
+
+def _build_revision() -> str:
+    env = (os.getenv("BUILD_REVISION") or "").strip()
+    if env:
+        return env
+    path = Path("/app/BUILD_REVISION")
+    if path.is_file():
+        try:
+            return path.read_text(encoding="utf-8").strip() or "dev"
+        except OSError:
+            pass
+    return "dev"
 from app.db.database import init_db
 from app.navidrome import bridge as navidrome
 from app.navidrome import config as navidrome_config
@@ -124,9 +139,9 @@ async def favicon():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": APP_VERSION}
+    return {"status": "ok", "version": APP_VERSION, "revision": _build_revision()}
 
 
 @app.get("/version")
 async def version():
-    return {"name": APP_NAME, "version": APP_VERSION}
+    return {"name": APP_NAME, "version": APP_VERSION, "revision": _build_revision()}
