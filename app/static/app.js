@@ -4924,19 +4924,19 @@
     if (oidcDivider) oidcDivider.hidden = !(passwordOn && oidcOn);
     if (oidcButton) {
       const label = methods?.oidcLabel || "OIDC";
-      oidcButton.textContent = `Mit ${label} anmelden`;
+      const caption = $("login-oidc-label") || oidcButton;
+      caption.textContent = `Mit ${label} anmelden`;
       oidcButton.href = methods?.oidcStartUrl || "/auth/oidc/start";
     }
     if ($("login-lead") && !setup) {
       if (passwordOn && oidcOn) {
         $("login-lead").textContent = methods?.internalAccess
-          ? "Internes Netz: Passwort oder OIDC. Amperfy/Subsonic weiterhin mit dem lokalen Passwort."
-          : "Anmelden mit Passwort oder OIDC. Amperfy/Subsonic weiterhin mit dem lokalen Passwort.";
+          ? `Passwort oder ${methods?.oidcLabel || "OIDC"} – im internen Netz beides möglich.`
+          : `Anmelden mit Passwort oder ${methods?.oidcLabel || "OIDC"}.`;
       } else if (oidcOn) {
-        $("login-lead").textContent = `Anmelden über ${methods?.oidcLabel || "OIDC"}. Passwort-Login ist für diese Adresse aus.`;
+        $("login-lead").textContent = `Weiter mit ${methods?.oidcLabel || "OIDC"}.`;
       } else {
-        $("login-lead").textContent =
-          "Melde dich mit deinem Music-Play-Konto an – nicht mit Unraid, Navidrome oder dem Reverse-Proxy.";
+        $("login-lead").textContent = "Melde dich mit deinem Music-Play-Konto an.";
       }
     }
   }
@@ -4950,8 +4950,8 @@
     overlay.hidden = false;
     $("app").hidden = true;
     $("login-lead").textContent = setup
-      ? "Lege den ersten Administrator an (mindestens 8 Zeichen). Danach kannst du unter Konfig weitere Benutzer hinzufügen."
-      : "Melde dich mit deinem Music-Play-Konto an – nicht mit Unraid, Navidrome oder dem Reverse-Proxy.";
+      ? "Lege den ersten Administrator an (mindestens 8 Zeichen)."
+      : "Melde dich mit deinem Music-Play-Konto an.";
     if ($("login-pass")) $("login-pass").autocomplete = setup ? "new-password" : "current-password";
     if ($("login-submit")) $("login-submit").textContent = setup ? "Zugang speichern" : "Anmelden";
     if (pass2 && form) {

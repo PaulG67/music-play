@@ -1,18 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#232a36"/>
-      <stop offset="1" stop-color="#0d0f14"/>
+    <linearGradient id="bg" x1="0.12" y1="0" x2="0.92" y2="1">
+      <stop offset="0" stop-color="#222"/>
+      <stop offset="1" stop-color="#0a0a0a"/>
     </linearGradient>
-    <linearGradient id="note" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ff6b83"/>
-      <stop offset="1" stop-color="#ff2d55"/>
+    <radialGradient id="glow" cx="50%" cy="38%" r="62%">
+      <stop offset="0" stop-color="#1db954" stop-opacity="0.38"/>
+      <stop offset="0.55" stop-color="#1db954" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#1db954" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="play" x1="0.2" y1="0.1" x2="0.9" y2="0.95">
+      <stop offset="0" stop-color="#4ae07a"/>
+      <stop offset="1" stop-color="#1db954"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <circle cx="256" cy="256" r="150" fill="none" stroke="#ff4d6d" stroke-opacity="0.25" stroke-width="14"/>
-  <path d="M212 126 348 100v54l-136 26z" fill="url(#note)"/>
-  <path d="M212 126h20v208h-20zM328 100h20v186h-20z" fill="url(#note)"/>
-  <ellipse cx="180" cy="342" rx="46" ry="38" fill="url(#note)"/>
-  <ellipse cx="296" cy="294" rx="46" ry="38" fill="url(#note)"/>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#glow)"/>
+  <circle cx="256" cy="256" r="178" fill="none" stroke="#1db954" stroke-opacity="0.14" stroke-width="12"/>
+  <circle cx="256" cy="256" r="138" fill="none" stroke="#1db954" stroke-opacity="0.22" stroke-width="8"/>
+  <circle cx="256" cy="256" r="98" fill="none" stroke="#1ed760" stroke-opacity="0.32" stroke-width="5"/>
+  <path fill="url(#play)" d="M228 174c0-7 7-12 14-8l150 82c7 4 7 13 0 17L242 347c-7 4-14-1-14-9V174z"/>
 </svg>

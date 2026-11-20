@@ -13,42 +13,31 @@ ICON_DIR = Path(__file__).resolve().parent.parent / "static" / "icons"
 SIZES = (180, 512)
 SUPERSAMPLE = 2
 
-BG_TOP = (0x23, 0x2A, 0x36)
-BG_BOTTOM = (0x0D, 0x0F, 0x14)
-NOTE_LIGHT = (0xFF, 0x6B, 0x83)
-NOTE_DARK = (0xFF, 0x2D, 0x55)
-RING = (0xFF, 0x4D, 0x6D)
+BG_TOP = (0x22, 0x22, 0x22)
+BG_BOTTOM = (0x0A, 0x0A, 0x0A)
+GREEN = (0x1D, 0xB9, 0x54)
+GREEN_LIGHT = (0x4A, 0xE0, 0x7A)
+GREEN_MID = (0x1E, 0xD7, 0x60)
 
-RING_RADIUS = 150.0
-RING_WIDTH = 7.0
-RING_ALPHA = 0.28
-
-# Note geometry in a 512x512 design space.
-HEADS = (((180.0, 342.0), 46.0, 38.0), ((296.0, 294.0), 46.0, 38.0))
-STEMS = ((212.0, 232.0, 126.0, 342.0), (328.0, 348.0, 100.0, 294.0))
-BEAM_X = (212.0, 348.0)
-BEAM_TOP = 126.0
-BEAM_HEIGHT = 54.0
-BEAM_RISE = 26.0
+RINGS = ((178.0, 6.0, 0.16), (138.0, 4.0, 0.24), (98.0, 2.6, 0.34))
+PLAY = ((228.0, 174.0), (228.0, 338.0), (378.0, 256.0))
+GLOW_CENTER = (256.0, 210.0)
 
 
 def _lerp(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[float, float, float]:
+    t = 0.0 if t < 0 else 1.0 if t > 1 else t
     return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t)
 
 
-def _in_note(x: float, y: float) -> bool:
-    for (cx, cy), rx, ry in HEADS:
-        if ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1.0:
-            return True
-    for x0, x1, y0, y1 in STEMS:
-        if x0 <= x <= x1 and y0 <= y <= y1:
-            return True
-    if BEAM_X[0] <= x <= BEAM_X[1]:
-        progress = (x - BEAM_X[0]) / (BEAM_X[1] - BEAM_X[0])
-        top = BEAM_TOP - BEAM_RISE * progress
-        if top <= y <= top + BEAM_HEIGHT:
-            return True
-    return False
+def _in_triangle(x: float, y: float) -> bool:
+    (x1, y1), (x2, y2), (x3, y3) = PLAY
+    denom = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3)
+    if denom == 0:
+        return False
+    a = ((y2 - y3) * (x - x3) + (x3 - x2) * (y - y3)) / denom
+    b = ((y3 - y1) * (x - x3) + (x1 - x3) * (y - y3)) / denom
+    c = 1.0 - a - b
+    return a >= 0 and b >= 0 and c >= 0
 
 
 def _sample(x: float, y: float) -> tuple[float, float, float]:
@@ -56,12 +45,17 @@ def _sample(x: float, y: float) -> tuple[float, float, float]:
     diagonal = (x + y) / 1024.0
     colour = _lerp(BG_TOP, BG_BOTTOM, diagonal)
 
-    distance = ((x - 256.0) ** 2 + (y - 256.0) ** 2) ** 0.5
-    if abs(distance - RING_RADIUS) <= RING_WIDTH:
-        colour = tuple(channel + (RING[i] - channel) * RING_ALPHA for i, channel in enumerate(colour))
+    glow_dist = ((x - GLOW_CENTER[0]) ** 2 + (y - GLOW_CENTER[1]) ** 2) ** 0.5
+    glow = max(0.0, 1.0 - glow_dist / 290.0) ** 2
+    colour = _lerp(colour, GREEN, glow * 0.28)
 
-    if _in_note(x, y):
-        colour = _lerp(NOTE_LIGHT, NOTE_DARK, diagonal)
+    distance = ((x - 256.0) ** 2 + (y - 256.0) ** 2) ** 0.5
+    for radius, width, alpha in RINGS:
+        if abs(distance - radius) <= width:
+            colour = _lerp(colour, GREEN_MID, alpha)
+
+    if _in_triangle(x, y):
+        colour = _lerp(GREEN_LIGHT, GREEN, (y - 174.0) / 164.0)
 
     return colour
 

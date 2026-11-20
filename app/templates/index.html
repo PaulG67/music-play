@@ -19,18 +19,27 @@
 <body data-version="{{ version }}">
 <section id="login" class="login">
   <form class="login-card" id="login-form" autocomplete="off" action="/auth/login" method="post">
-    <img src="/static/icons/icon.svg" alt="">
-    <h1>Music Play</h1>
-    <p id="login-lead">Melde dich mit deinem Music-Play-Konto an – nicht mit Unraid, Navidrome oder dem Proxy.</p>
+    <div class="login-brand">
+      <div class="login-mark">
+        <img src="/static/icons/icon.svg" width="88" height="88" alt="">
+      </div>
+      <h1>Music <span>Play</span></h1>
+    </div>
+    <p id="login-lead">Melde dich mit deinem Konto an.</p>
     <div id="login-password-fields">
+      <label class="login-field" for="login-user">Benutzername</label>
       <input id="login-user" type="text" name="mp_username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="Benutzername">
+      <label class="login-field" for="login-pass">Passwort</label>
       <input id="login-pass" type="password" name="mp_password" autocomplete="current-password" placeholder="Passwort" enterkeyhint="go">
       <button type="submit" id="login-submit">Anmelden</button>
     </div>
     <p id="login-error" class="login-error" hidden></p>
     <div id="login-oidc-box" class="login-oidc" hidden>
       <p id="login-oidc-divider" class="login-oidc-divider" hidden>oder</p>
-      <a id="login-oidc-button" class="login-oidc-button" href="/auth/oidc/start">Mit OIDC anmelden</a>
+      <a id="login-oidc-button" class="login-oidc-button" href="/auth/oidc/start">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V6a5 5 0 0 0-5-5zm-3 8V6a3 3 0 0 1 6 0v3H9z"/></svg>
+        <span id="login-oidc-label">Mit OIDC anmelden</span>
+      </a>
     </div>
   </form>
   <input id="login-pass2" type="password" autocomplete="new-password" placeholder="Passwort wiederholen" hidden disabled>
