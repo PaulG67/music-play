@@ -2704,6 +2704,12 @@
       ICONS.key,
       [
         element("div", { class: "settings-form" }, [
+        status.loginRequired === false
+          ? element("p", {
+              class: "muted",
+              text: "App-Anmeldung ist aus (Karte darüber). Ohne dieses Login kommt jeder direkt in die App – OIDC wird dann nicht gefragt. Beim Speichern mit „OIDC aktiv“ wird die App-Anmeldung eingeschaltet.",
+            })
+          : null,
         element("label", { class: "switch" }, [
           element("input", {
             type: "checkbox",
@@ -2778,8 +2784,9 @@
                 };
                 const secret = $("oidc-client-secret").value;
                 if (secret) body.client_secret = secret;
-                await api("/api/oidc", { method: "PUT", body });
-                toast("OIDC gespeichert");
+                const saved = await api("/api/oidc", { method: "PUT", body });
+                if (saved.loginRequired !== false) state.passwordRequired = true;
+                toast("OIDC gespeichert. Zum Testen oben rechts abmelden.");
                 render(state.route, true);
               } catch (error) {
                 toast(error.message);

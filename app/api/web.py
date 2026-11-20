@@ -386,13 +386,22 @@ async def oidc_status(request: Request):
 async def save_oidc(request: Request, payload: dict = Body(...)):
     _require_admin(request)
     saved = oidc_config.save(payload)
+    login_on = auth_store.login_required()
+    if saved.get("enabled") and not login_on:
+        login_on = auth_store.set_login_required(True)
+        logger.info("OIDC aktiv: App-Anmeldung wurde eingeschaltet")
     logger.info(
         "OIDC gespeichert (enabled={}, mode={})",
         saved.get("enabled"),
         saved.get("auth_mode"),
     )
     view = oidc_config.public_view()
-    return {**view, "ok": True, "redirectUriSuggested": oidc_flow.redirect_uri_for(request)}
+    return {
+        **view,
+        "ok": True,
+        "loginRequired": login_on,
+        "redirectUriSuggested": oidc_flow.redirect_uri_for(request),
+    }
 
 
 @router.post("/oidc/test")
