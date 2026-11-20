@@ -2254,8 +2254,8 @@
     ]);
   }
 
-  function configCard(title, hint, icon, children) {
-    return element("section", { class: "config-card" }, [
+  function configCard(title, hint, icon, children, cardClass) {
+    return element("section", { class: cardClass ? `config-card ${cardClass}` : "config-card" }, [
       element("div", { class: "config-card-head" }, [
         element("span", { class: "config-card-icon", html: icon }),
         element("div", { class: "config-card-titles" }, [
@@ -2268,9 +2268,38 @@
   }
 
   function labeledInput(id, label, attrs) {
-    return element("div", { class: "field" }, [
+    const options = { ...(attrs || {}) };
+    const hint = options.hint;
+    const span = options.span;
+    delete options.hint;
+    delete options.span;
+    return element("div", { class: span ? "field field-span" : "field" }, [
       element("label", { for: id, text: label }),
-      element("input", { id, ...attrs }),
+      element("input", { id, ...options }),
+      hint ? element("p", { class: "muted", text: hint }) : null,
+    ]);
+  }
+
+  function labeledSelect(id, label, choices, selected, attrs) {
+    const options = { ...(attrs || {}) };
+    const hint = options.hint;
+    const span = options.span;
+    delete options.hint;
+    delete options.span;
+    return element("div", { class: span ? "field field-span" : "field" }, [
+      element("label", { for: id, text: label }),
+      element(
+        "select",
+        { id, class: "select", ...options },
+        (choices || []).map((choice) =>
+          element("option", {
+            value: choice.value,
+            selected: selected === choice.value ? "selected" : null,
+            text: choice.label,
+          })
+        )
+      ),
+      hint ? element("p", { class: "muted", text: hint }) : null,
     ]);
   }
 
@@ -2674,6 +2703,7 @@
       "OpenID Connect für die Web-Anmeldung (z. B. Pocket ID). Redirect-URI in Pocket ID eintragen. Subsonic/Amperfy bleibt beim Passwort.",
       ICONS.key,
       [
+        element("div", { class: "settings-form" }, [
         element("label", { class: "switch" }, [
           element("input", {
             type: "checkbox",
@@ -2682,72 +2712,46 @@
           }),
           element("span", { text: "OIDC aktiv" }),
         ]),
-        element("label", { text: "Anzeigename auf dem Login" }),
-        element("input", {
-          id: "oidc-name",
+        element("div", { class: "settings-form-grid" }, [
+        labeledInput("oidc-name", "Anzeigename auf dem Login", {
           type: "text",
           value: oidc.displayName || "Pocket ID",
           placeholder: "Pocket ID",
         }),
-        element("label", { text: "Issuer-URL" }),
-        element("input", {
-          id: "oidc-issuer",
+        labeledInput("oidc-issuer", "Issuer-URL", {
           type: "url",
           value: oidc.issuer || "",
           placeholder: "https://id.example.com",
           autocomplete: "off",
         }),
-        element("label", { text: "Client ID" }),
-        element("input", {
-          id: "oidc-client-id",
+        labeledInput("oidc-client-id", "Client ID", {
           type: "text",
           value: oidc.clientId || "",
           autocomplete: "off",
         }),
-        element("label", { text: "Client Secret" }),
-        element("input", {
-          id: "oidc-client-secret",
+        labeledInput("oidc-client-secret", "Client Secret", {
           type: "password",
           value: "",
-          placeholder: oidc.clientSecretSet ? "•••••••• (gesetzt)" : "Secret",
+          placeholder: oidc.clientSecretSet ? "Unverändert lassen" : "Secret",
           autocomplete: "new-password",
         }),
-        element("label", { text: "Redirect URI (optional)" }),
-        element("input", {
-          id: "oidc-redirect",
+        labeledInput("oidc-redirect", "Redirect URI (optional)", {
           type: "url",
           value: oidc.redirectUri || "",
           placeholder: oidc.redirectUriSuggested || "https://music.example.com/auth/oidc/callback",
           autocomplete: "off",
+          span: true,
+          hint: `Empfohlen: ${(oidc.redirectUriSuggested || oidc.redirectUri || "/auth/oidc/callback").toString()}`,
         }),
-        element("p", {
-          class: "muted",
-          text: `Empfohlen: ${(oidc.redirectUriSuggested || oidc.redirectUri || "/auth/oidc/callback").toString()}`,
-        }),
-        element("label", { text: "Login-Modus" }),
-        element(
-          "select",
-          { id: "oidc-mode" },
-          modeOptions.map((option) =>
-            element("option", {
-              value: option.value,
-              selected: mode === option.value ? "selected" : null,
-              text: option.label,
-            })
-          )
-        ),
-        element("label", { text: "Interne Netze (CIDR, kommagetrennt)" }),
-        element("input", {
-          id: "oidc-internal",
+        labeledSelect("oidc-mode", "Login-Modus", modeOptions, mode),
+        labeledInput("oidc-internal", "Interne Netze", {
           type: "text",
           value: oidc.internalNetworks || "",
           placeholder: "10.0.0.0/8,192.168.0.0/16",
           autocomplete: "off",
+          hint: "CIDR, kommagetrennt. Für „Intern beides“: aus dem LAN Passwort + OIDC, von extern nur OIDC.",
         }),
-        element("p", {
-          class: "muted",
-          text: "Für „Intern beides“: aus dem LAN Passwort + OIDC, von extern nur OIDC. X-Forwarded-For vom Proxy wird ausgewertet.",
-        }),
+        ]),
         element("label", { class: "switch" }, [
           element("input", {
             type: "checkbox",
@@ -2756,9 +2760,9 @@
           }),
           element("span", { text: "Benutzer beim ersten OIDC-Login automatisch anlegen" }),
         ]),
-        element("div", { class: "row gap" }, [
+        element("div", { class: "row-buttons" }, [
           element("button", {
-            class: "chip",
+            class: "chip solid",
             text: "Speichern",
             onclick: async () => {
               try {
@@ -2810,7 +2814,9 @@
             },
           }),
         ]),
-      ]
+        ]),
+      ],
+      "config-card-wide"
     );
   }
 
@@ -2973,6 +2979,7 @@
         connectionPill(Boolean(nd.configured && nd.reachable), nd.configured && nd.reachable ? "Navidrome" : "Navidrome aus"),
         connectionPill(Boolean(ms.configured && ms.reachable), ms.configured && ms.reachable ? "MediaSync" : "MediaSync aus"),
         connectionPill(Boolean((status.musikat || {}).configured && (status.musikat || {}).reachable), (status.musikat || {}).configured && (status.musikat || {}).reachable ? "MusiKat" : "MusiKat aus"),
+        connectionPill(Boolean((status.oidc || {}).enabled), (status.oidc || {}).enabled ? "OIDC" : "OIDC aus"),
       ]),
       element("div", { class: "config-grid" }, [
         accountSettings(status),
